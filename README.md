@@ -5,11 +5,9 @@ plus cAdvisor-compatible resource usage** from the Docker API over the unix
 socket — with no housekeeper daemon, no cgroup parsing, and no third-party
 dependencies.
 
-It was extracted from the monitoring agent (`monitoring/docker-health-exporter`
-in `gportal` / `proxy-service` / `monitoring`) when it grew the usage metrics
-that used to come from cAdvisor. The health/restart metrics originated from
+The health/restart metrics originated from
 [`scrape_insert_influxdb`](https://github.com/gtsteffaniak/scrape_insert_influxdb)'s
-`dockerStats` leg; the usage metrics replicate the subset of cAdvisor that the
+`dockerStats`, the usage metrics replicate the subset of cAdvisor that the
 stack actually consumes.
 
 ## What it exposes
