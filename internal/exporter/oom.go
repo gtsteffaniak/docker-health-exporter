@@ -111,9 +111,10 @@ func RunOOMWatcher(ctx context.Context, client EventsClient, store *OOMStore) {
 		}
 		var since time.Time
 		if t := lastEventNano.Load(); t > 0 {
-			// Strictly after the last processed event so Docker's inclusive
-			// since filter does not replay the same oom on reconnect.
-			since = time.Unix(0, t+1)
+			// Inclusive since: Docker may return several OOMs at the same
+			// timestamp. Reconnecting at t lets a later container in that
+			// second arrive; OOMStore dedupes exact (id, TimeNano) replays.
+			since = time.Unix(0, t)
 		}
 		err := watchOOMStream(ctx, client, store, since, &lastEventNano)
 		if ctx.Err() != nil {
@@ -188,7 +189,7 @@ func watchOOMStream(ctx context.Context, client EventsClient, store *OOMStore, s
 		if id == "" {
 			continue
 		}
-		store.RecordOOM(id, tn)
+		store.RecordOOM(id, ev.TimeNano)
 	}
 	if err := sc.Err(); err != nil {
 		return err

@@ -1,6 +1,7 @@
 package exporter
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -74,7 +75,7 @@ func TestReconnectReplayDoesNotDoubleCount(t *testing.T) {
 	const tn = int64(1700000000123456789)
 	line := []byte(`{"Type":"container","Action":"oom","Actor":{"ID":"id-replay"},"timeNano":` +
 		strconv.FormatInt(tn, 10) + `}` + "\n")
-	client := &replayEventsClient{lines: [][]byte{line, line}}
+	client := &replayEventsClient{streams: [][]byte{line, line}}
 	store := NewOOMStore()
 	var lastNano atomic.Int64
 
@@ -85,7 +86,7 @@ func TestReconnectReplayDoesNotDoubleCount(t *testing.T) {
 	if got := store.Count("id-replay"); got != 1 {
 		t.Fatalf("after first stream count = %d", got)
 	}
-	since := time.Unix(0, lastNano.Load()+1)
+	since := time.Unix(0, lastNano.Load())
 	if err := watchOOMStream(ctx, client, store, since, &lastNano); err != nil && err != io.EOF {
 		t.Fatalf("reconnect stream: %v", err)
 	}
@@ -155,6 +156,58 @@ func TestEventsPathFiltersOOMOnly(t *testing.T) {
 	}
 }
 
+func TestReconnectInclusiveSinceDistinctContainerSameNano(t *testing.T) {
+	const tn = int64(1700000000123456789)
+	mk := func(id string) []byte {
+		return []byte(`{"Type":"container","Action":"oom","Actor":{"ID":"` + id +
+			`"},"timeNano":` + strconv.FormatInt(tn, 10) + `}` + "\n")
+	}
+	client := &replayEventsClient{streams: [][]byte{
+		mk("id-a"),
+		append(append([]byte(nil), mk("id-a")...), mk("id-b")...),
+	}}
+	store := NewOOMStore()
+	var lastNano atomic.Int64
+	ctx := context.Background()
+
+	if err := watchOOMStream(ctx, client, store, time.Time{}, &lastNano); err != nil && err != io.EOF {
+		t.Fatalf("first stream: %v", err)
+	}
+	if got := store.Count("id-a"); got != 1 {
+		t.Fatalf("after first stream id-a = %d", got)
+	}
+	since := time.Unix(0, lastNano.Load())
+	if err := watchOOMStream(ctx, client, store, since, &lastNano); err != nil && err != io.EOF {
+		t.Fatalf("reconnect: %v", err)
+	}
+	if got := client.sinceAt; len(got) != 1 || got[0] != tn {
+		t.Fatalf("reconnect since = %v, want [%d]", got, tn)
+	}
+	if got := store.Count("id-a"); got != 1 {
+		t.Fatalf("id-a after replay = %d, want 1", got)
+	}
+	if got := store.Count("id-b"); got != 1 {
+		t.Fatalf("id-b after inclusive reconnect = %d, want 1", got)
+	}
+}
+
+func TestTwoOOMAtSameSecondWithoutTimeNano(t *testing.T) {
+	store := NewOOMStore()
+	line := func() []byte {
+		return []byte(`{"Type":"container","Action":"oom","Actor":{"ID":"id-1"},"time":1700000000}` + "\n")
+	}
+	var lastNano atomic.Int64
+	ctx := context.Background()
+	body := strings.NewReader(string(line()) + string(line()))
+	client := &staticEventsClient{body: body}
+	if err := watchOOMStream(ctx, client, store, time.Time{}, &lastNano); err != nil && err != io.EOF {
+		t.Fatalf("watch: %v", err)
+	}
+	if got := store.Count("id-1"); got != 2 {
+		t.Fatalf("count = %d, want 2 (no TimeNano dedupe)", got)
+	}
+}
+
 func TestEventsPathSinceNumeric(t *testing.T) {
 	since := time.Unix(1700000000, 123456789)
 	path := eventsPath(since)
@@ -191,16 +244,28 @@ func dockerOOMEventAt(id, name string, timeNano int64) map[string]any {
 }
 
 type replayEventsClient struct {
-	lines [][]byte
-	calls atomic.Int32
+	streams [][]byte
+	sinceAt []int64
+	calls   atomic.Int32
 }
 
-func (r *replayEventsClient) Events(_ context.Context, _ time.Time) (io.ReadCloser, error) {
-	i := int(r.calls.Add(1)) - 1
-	if i >= len(r.lines) {
-		i = len(r.lines) - 1
+func (r *replayEventsClient) Events(_ context.Context, since time.Time) (io.ReadCloser, error) {
+	if !since.IsZero() {
+		r.sinceAt = append(r.sinceAt, since.UnixNano())
 	}
-	return io.NopCloser(strings.NewReader(string(r.lines[i]))), nil
+	i := int(r.calls.Add(1)) - 1
+	if i >= len(r.streams) {
+		i = len(r.streams) - 1
+	}
+	return io.NopCloser(bytes.NewReader(r.streams[i])), nil
+}
+
+type staticEventsClient struct {
+	body io.Reader
+}
+
+func (s *staticEventsClient) Events(_ context.Context, _ time.Time) (io.ReadCloser, error) {
+	return io.NopCloser(s.body), nil
 }
 
 func waitForOOMCount(t *testing.T, srv *Server, id string, want uint64) {
