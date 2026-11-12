@@ -41,21 +41,25 @@ cAdvisor ships by default are **not** emitted — nothing queries them.
 | `container_network_transmit_bytes_total` | counter | Total bytes transmitted |
 | `container_fs_reads_bytes_total` | counter | Total disk bytes read, summed over blkio entries |
 | `container_fs_writes_bytes_total` | counter | Total disk bytes written |
-| `container_oom_events_total` | counter | Always **0** from Docker `/stats` (see below) |
+| `container_oom_events_total` | counter | Cumulative Docker container `oom` events (`GET /events`, see below) |
 | `container_threads` | gauge | Current thread count |
 | `container_threads_max` | gauge | Thread limit (`pids_stats.limit`) |
 | `container_start_time_seconds` | gauge | cAdvisor-named alias of started time |
 | `container_last_seen` | gauge | Unix time of this scrape |
 
-Usage series are emitted for every container in Docker **run state** `running`,
-including those reporting `healthy` / `unhealthy` / `starting` from a
-healthcheck. Stopped containers carry no usage for that scrape.
+Usage series (CPU, memory, network, disk, threads) are emitted for every
+container in Docker **run state** `running`, including those reporting
+`healthy` / `unhealthy` / `starting` from a healthcheck. Stopped containers
+carry no usage for that scrape. **`container_oom_events_total` is emitted for
+every container Docker lists** (running or stopped) so
+`increase(container_oom_events_total[15m])` fires even when the container stays
+exited after an OOM.
 
 ### Deliberate differences from cAdvisor
 
 | Topic | This exporter |
 |---|---|
-| `container_oom_events_total` | Always `0`: Docker `/stats` has no OOM counter (would need cgroup `memory.events`) |
+| `container_oom_events_total` | Counts Engine **EventOOM** (`Action: oom` on `GET /events`), not cAdvisor's `/dev/kmsg` parse (no privileged device). In-memory counter resets on exporter restart; Prometheus `increase()` treats resets, but if the counter returns to the same value before the next scrape (e.g. 1 → restart → 1), no increase is recorded in that interval. Streams live while the exporter runs. On reconnect, `since=` backfill uses the last processed event timestamp (nanoseconds, exclusive) and is best-effort (daemon keeps ~256 events total). OOMs during a stream outage before any event has been recorded are not backfilled. Typically container memory-limit OOMs the daemon attributes; host-wide kills stay on `node_vmstat_oom_kill`. |
 | Network / disk | Summed across all interfaces / devices — no `interface` or `device` labels |
 | Per-CPU / sched / hugetlb | Not emitted — dashboards do not query them (`container_cpu_usage_seconds_total` is emitted) |
 | `machine_*`, `cadvisor_version_info` | Not emitted |

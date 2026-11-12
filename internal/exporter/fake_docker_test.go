@@ -1,6 +1,7 @@
 package exporter
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,8 @@ type fakeDocker struct {
 	list    []Container
 	inspect map[string]json.RawMessage
 	stats   map[string]json.RawMessage
+	// events, when non-nil, enables GET /events and streams lines from the channel.
+	events chan []byte
 }
 
 func (f *fakeDocker) handler() http.Handler {
@@ -35,6 +38,32 @@ func (f *fakeDocker) handler() http.Handler {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(raw)
+		case r.URL.Path == "/events" && r.Method == http.MethodGet:
+			if !fakeEventsFiltersOK(r.URL.Query().Get("filters")) {
+				http.Error(w, "unexpected event filters", http.StatusBadRequest)
+				return
+			}
+			if f.events == nil {
+				http.Error(w, "events not configured", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			flusher, _ := w.(http.Flusher)
+			for {
+				select {
+				case <-r.Context().Done():
+					return
+				case line, ok := <-f.events:
+					if !ok {
+						return
+					}
+					_, _ = w.Write(line)
+					_, _ = w.Write([]byte("\n"))
+					if flusher != nil {
+						flusher.Flush()
+					}
+				}
+			}
 		case strings.Contains(r.URL.Path, "/stats") && r.Method == http.MethodGet:
 			q := r.URL.Query()
 			if q.Get("stream") != "false" || q.Get("one-shot") != "true" {
@@ -66,6 +95,47 @@ func newTestServer(t *testing.T, f *fakeDocker, now time.Time) *Server {
 	t.Cleanup(ts.Close)
 	cli := NewHTTPClient(ts.URL, ts.Client())
 	return NewServerWithAPI(cli, func() time.Time { return now })
+}
+
+func newTestServerWithEvents(t *testing.T, f *fakeDocker, now time.Time) (*Server, *Client, context.CancelFunc) {
+	t.Helper()
+	ts := newFakeDockerServer(f)
+	t.Cleanup(ts.Close)
+	cli := NewHTTPClient(ts.URL, ts.Client())
+	store := NewOOMStore()
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := NewServerWithAPIAndOOM(cli, cli, store, func() time.Time { return now })
+	go RunOOMWatcher(ctx, cli, store)
+	t.Cleanup(cancel)
+	return srv, cli, cancel
+}
+
+func fakeEventsFiltersOK(filters string) bool {
+	var m map[string][]string
+	if err := json.Unmarshal([]byte(filters), &m); err != nil {
+		return false
+	}
+	okType, okEvent := false, false
+	for _, v := range m["type"] {
+		if v == "container" {
+			okType = true
+		}
+	}
+	for _, v := range m["event"] {
+		if v == "oom" {
+			okEvent = true
+		}
+	}
+	return okType && okEvent
+}
+
+func marshalEventLine(t *testing.T, ev any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(raw, '\n')
 }
 
 const fixedScrapeUnix = int64(1700000000)

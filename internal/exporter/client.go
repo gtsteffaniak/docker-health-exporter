@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"time"
@@ -88,25 +89,28 @@ type DockerAPI interface {
 
 // Client talks to the Docker API over the unix socket or an HTTP base URL.
 type Client struct {
-	hc      *http.Client
-	socket  string
-	baseURL string // non-empty in tests (httptest server URL)
+	hc       *http.Client
+	streamHC *http.Client // no Timeout — for long-lived /events streams
+	socket   string
+	baseURL  string // non-empty in tests (httptest server URL)
 }
 
 // New returns a Client dialing the Docker API at socket with the given
 // per-request timeout.
 func New(socket string, timeout time.Duration) *Client {
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", socket)
+		},
+	}
 	return &Client{
 		socket: socket,
 		hc: &http.Client{
-			Timeout: timeout,
-			Transport: &http.Transport{
-				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-					var d net.Dialer
-					return d.DialContext(ctx, "unix", socket)
-				},
-			},
+			Timeout:   timeout,
+			Transport: transport,
 		},
+		streamHC: &http.Client{Transport: transport},
 	}
 }
 
@@ -116,8 +120,9 @@ func NewHTTPClient(baseURL string, hc *http.Client) *Client {
 		hc = http.DefaultClient
 	}
 	return &Client{
-		hc:      hc,
-		baseURL: baseURL,
+		hc:       hc,
+		streamHC: hc,
+		baseURL:  baseURL,
 	}
 }
 
@@ -154,6 +159,35 @@ func (c *Client) Stats(ctx context.Context, id string) (*Stats, error) {
 		return nil, err
 	}
 	return &out, nil
+}
+
+// Events opens a streaming GET /events body filtered to container oom.
+// The caller must close the returned ReadCloser. since is passed to Docker
+// on reconnect; the daemon retains only 256 events total, so backfill is
+// best-effort.
+func (c *Client) Events(ctx context.Context, since time.Time) (io.ReadCloser, error) {
+	path := eventsPath(since)
+	url := "http://docker" + path
+	if c.baseURL != "" {
+		url = c.baseURL + path
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	hc := c.streamHC
+	if hc == nil {
+		hc = c.hc
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		return nil, fmt.Errorf("docker returned %s for %s", resp.Status, path)
+	}
+	return resp.Body, nil
 }
 
 func (c *Client) get(ctx context.Context, path string, into any) error {

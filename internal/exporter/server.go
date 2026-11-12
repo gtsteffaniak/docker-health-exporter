@@ -1,6 +1,7 @@
 package exporter
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,13 +12,29 @@ import (
 
 // Server renders /metrics from the Docker API.
 type Server struct {
-	client DockerAPI
-	now    func() time.Time
+	client   DockerAPI
+	events   EventsClient
+	now      func() time.Time
+	oomStore *OOMStore
 }
 
 // NewServer builds a Server for the given Docker socket and timeout.
 func NewServer(socket string, timeout time.Duration) *Server {
-	return NewServerWithAPI(New(socket, timeout), time.Now)
+	cli := New(socket, timeout)
+	return NewServerWithClient(cli, time.Now)
+}
+
+// NewServerWithClient builds a Server with a real Client (enables OOM watcher).
+func NewServerWithClient(cli *Client, now func() time.Time) *Server {
+	if now == nil {
+		now = time.Now
+	}
+	return &Server{
+		client:   cli,
+		events:   cli,
+		now:      now,
+		oomStore: NewOOMStore(),
+	}
 }
 
 // NewServerWithAPI builds a Server with an injectable DockerAPI (for tests).
@@ -25,7 +42,38 @@ func NewServerWithAPI(api DockerAPI, now func() time.Time) *Server {
 	if now == nil {
 		now = time.Now
 	}
-	return &Server{client: api, now: now}
+	return &Server{
+		client:   api,
+		now:      now,
+		oomStore: NewOOMStore(),
+	}
+}
+
+// NewServerWithAPIAndOOM is like NewServerWithAPI but injects a shared OOM store
+// (for tests that drive /events).
+func NewServerWithAPIAndOOM(api DockerAPI, events EventsClient, store *OOMStore, now func() time.Time) *Server {
+	if now == nil {
+		now = time.Now
+	}
+	if store == nil {
+		store = NewOOMStore()
+	}
+	s := &Server{
+		client:   api,
+		events:   events,
+		now:      now,
+		oomStore: store,
+	}
+	return s
+}
+
+// RunBackground starts goroutines that must run for the process lifetime
+// (Docker /events OOM watcher). Safe to skip in short-lived tests.
+func (s *Server) RunBackground(ctx context.Context) {
+	if s == nil || s.events == nil || s.oomStore == nil {
+		return
+	}
+	go RunOOMWatcher(ctx, s.events, s.oomStore)
 }
 
 // New2 is the module-level constructor used by tests.
@@ -92,6 +140,12 @@ func (s *Server) ServeMetrics(w http.ResponseWriter, r *http.Request) {
 				lifecycleLabels, float64(insp.RestartCount))
 		}
 
+		var oom uint64
+		if s.oomStore != nil {
+			oom = s.oomStore.Count(c.ID)
+		}
+		emitOOMEvents(enc, labels, oom)
+
 		// Usage for every Docker-running container, including healthchecked
 		// ones (healthy/unhealthy/starting). Health state is not run state.
 		if IsRunning(c) {
@@ -103,6 +157,22 @@ func (s *Server) ServeMetrics(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// emitOOMEvents writes container_oom_events_total for any container Docker lists,
+// including stopped/exited, so increase() fires even when the container stays down.
+func emitOOMEvents(enc *prom.Encoder, labels map[string]string, oomEvents uint64) {
+	usageLabels := map[string]string{
+		"name":            labels["name"],
+		"container":       labels["container"],
+		"container_id":    labels["container_id"],
+		"image":           labels["image"],
+		"compose_project": labels["compose_project"],
+		"compose_service": labels["compose_service"],
+	}
+	enc.Counter("container_oom_events_total",
+		"Cumulative Docker container oom events (Engine /events Action oom).",
+		usageLabels, float64(oomEvents))
 }
 
 // emitUsage writes the cAdvisor-compatible usage families for one container.
@@ -145,9 +215,6 @@ func emitUsage(enc *prom.Encoder, labels map[string]string, s *Stats, insp *Insp
 		"Total disk bytes read.", usageLabels, float64(reads))
 	enc.Counter("container_fs_writes_bytes_total",
 		"Total disk bytes written.", usageLabels, float64(writes))
-
-	enc.Counter("container_oom_events_total",
-		"OOM kills (always 0 from Docker /stats — see README).", usageLabels, float64(OOMEvents(s)))
 
 	enc.Gauge("container_threads",
 		"Current thread count.", usageLabels, float64(s.PidsStats.Current))

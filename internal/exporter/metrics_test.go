@@ -221,15 +221,6 @@ func TestCPUSecsNil(t *testing.T) {
 	}
 }
 
-func TestOOMEventsAlwaysZero(t *testing.T) {
-	raw := readTestdata(t, "docker_stats_sample.json")
-	var s Stats
-	_ = json.Unmarshal(raw, &s)
-	if got := OOMEvents(&s); got != 0 {
-		t.Errorf("OOMEvents = %d, want 0", got)
-	}
-}
-
 func TestIsRunning(t *testing.T) {
 	if !IsRunning(Container{State: "running"}) {
 		t.Error("expected running")
