@@ -11,13 +11,21 @@ import (
 
 // Server renders /metrics from the Docker API.
 type Server struct {
-	client *Client
+	client DockerAPI
 	now    func() time.Time
 }
 
-// New builds a Server for the given Docker socket and timeout.
+// NewServer builds a Server for the given Docker socket and timeout.
 func NewServer(socket string, timeout time.Duration) *Server {
-	return &Server{client: New(socket, timeout), now: time.Now}
+	return NewServerWithAPI(New(socket, timeout), time.Now)
+}
+
+// NewServerWithAPI builds a Server with an injectable DockerAPI (for tests).
+func NewServerWithAPI(api DockerAPI, now func() time.Time) *Server {
+	if now == nil {
+		now = time.Now
+	}
+	return &Server{client: api, now: now}
 }
 
 // New2 is the module-level constructor used by tests.
@@ -40,7 +48,6 @@ func (s *Server) ServeMetrics(w http.ResponseWriter, r *http.Request) {
 	enc := prom.NewEncoder(w)
 	enc.Gauge("docker_health_exporter_up", "Whether the Docker API answered.", nil, 1)
 
-	ok := make([]*prom.Row, 0, len(containers))
 	for _, c := range containers {
 		name := ContainerName(c.Names)
 		if name == "" {
@@ -64,49 +71,47 @@ func (s *Server) ServeMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 		enc.Gauge("container_health_status", "Docker health of the container, 1 for the current state.", labels, 1)
 
-		// cAdvisor-compatible start/last-seen, from inspect StartedAt.
 		var started int64
 		if insp != nil {
 			started = StartedUnix(insp.State.StartedAt)
 		}
-		// These are counters because they are monotonic per container
-		// lifetime; dashboards use rate()/increase() on them.
-		enc.Counter("container_start_time_seconds", "Unix time the container last started, 0 if never.", labels, float64(started))
-		enc.Counter("container_last_seen", "Unix time of this scrape.", withoutState(labels), float64(s.now().Unix()))
+		lifecycleLabels := map[string]string{
+			"container":       name,
+			"name":            name,
+			"compose_project": project,
+		}
+		enc.Gauge("container_started_time_seconds",
+			"Unix time the container last started, 0 if never.", lifecycleLabels, float64(started))
+		enc.Gauge("container_start_time_seconds",
+			"cAdvisor-named Unix start time (same value as container_started_time_seconds).",
+			withoutState(labels), float64(started))
+		enc.Gauge("container_last_seen", "Unix time of this scrape.", withoutState(labels), float64(s.now().Unix()))
 
 		if insp != nil {
 			enc.Counter("container_restart_count", "Docker's restart count for the container (resets when it is recreated).",
-				map[string]string{"container": name, "name": name, "compose_project": project},
-				float64(insp.RestartCount))
+				lifecycleLabels, float64(insp.RestartCount))
 		}
 
-		// Usage — only running containers have one-shot stats; stopped ones
-		// simply carry no usage series for this scrape.
-		if insp != nil && state == "running" {
+		// Usage for every Docker-running container, including healthchecked
+		// ones (healthy/unhealthy/starting). Health state is not run state.
+		if IsRunning(c) {
 			stats, err := s.client.Stats(r.Context(), c.ID)
 			if err != nil {
 				log.Printf("stats %s: %v", name, err)
 			} else {
-				emitUsage(enc, labels, stats)
+				emitUsage(enc, labels, stats, insp)
 			}
 		}
-
-		ok = append(ok, &prom.Row{Labels: labels})
 	}
-	_ = ok
 }
 
 // emitUsage writes the cAdvisor-compatible usage families for one container.
 //
-// Only the seven families actually consumed by the Grafana dashboards and
-// the ContainerOOMKilled alert are emitted. cAdvisor's long tail (per-CPU,
+// Only the families actually consumed by the Grafana dashboards and the
+// ContainerOOMKilled alert are emitted. cAdvisor's long tail (per-CPU,
 // sched, hugetlb, throttling, process stats) is omitted by config on both
 // ends, so there is nothing to drop.
-//
-// All usage families are counters (monotonic per container). Memory
-// working-set is the exception: it is a gauge (current working set), matching
-// cAdvisor's container_memory_working_set_bytes.
-func emitUsage(enc *prom.Encoder, labels map[string]string, s *Stats) {
+func emitUsage(enc *prom.Encoder, labels map[string]string, s *Stats, insp *Inspect) {
 	usageLabels := map[string]string{
 		"name":            labels["name"],
 		"container":       labels["container"],
@@ -120,13 +125,14 @@ func emitUsage(enc *prom.Encoder, labels map[string]string, s *Stats) {
 		"Total CPU usage in seconds.", usageLabels, CPUSecs(s))
 
 	enc.Gauge("container_memory_working_set_bytes",
-		"Working set memory.", usageLabels, float64(WorkingSetBytes(s)))
+		"Working set memory (usage minus inactive file cache).", usageLabels, float64(WorkingSetBytes(s)))
 	enc.Gauge("container_memory_usage_bytes",
 		"Total memory usage.", usageLabels, float64(s.MemoryStats.Usage))
 	enc.Gauge("container_memory_max_usage_bytes",
 		"Maximum memory usage.", usageLabels, float64(s.MemoryStats.MaxUsage))
-	enc.Gauge("container_memory_limit_bytes",
-		"Memory limit.", usageLabels, float64(s.MemoryStats.Limit))
+	enc.Gauge("container_spec_memory_limit_bytes",
+		"Configured memory limit from inspect HostConfig.Memory.", usageLabels,
+		float64(SpecMemoryLimitBytes(insp, s)))
 
 	rx, tx := NetworkIO(s)
 	enc.Counter("container_network_receive_bytes_total",
@@ -141,10 +147,12 @@ func emitUsage(enc *prom.Encoder, labels map[string]string, s *Stats) {
 		"Total disk bytes written.", usageLabels, float64(writes))
 
 	enc.Counter("container_oom_events_total",
-		"OOM kills (best-effort, currently 0 — see OOMEvents).", usageLabels, float64(OOMEvents(s)))
+		"OOM kills (always 0 from Docker /stats — see README).", usageLabels, float64(OOMEvents(s)))
 
+	enc.Gauge("container_threads",
+		"Current thread count.", usageLabels, float64(s.PidsStats.Current))
 	enc.Gauge("container_threads_max",
-		"Maximum threads seen.", usageLabels, float64(s.PidsStats.Current))
+		"Thread limit.", usageLabels, float64(s.PidsStats.Limit))
 }
 
 func withoutState(labels map[string]string) map[string]string {

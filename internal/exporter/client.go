@@ -21,36 +21,47 @@ type Container struct {
 	Labels map[string]string `json:"Labels"`
 }
 
+// Health is Docker's inspect State.Health block (healthcheck status).
+type Health struct {
+	Status string `json:"Status"`
+}
+
 // Inspect is the subset of /containers/{id}/json this exporter needs.
-// Health.Status is read directly rather than parsed out of the list Status
-// string, so health collection does not depend on Docker's text formatting.
+// Health lives under State.Health in the real Docker JSON document.
 type Inspect struct {
 	RestartCount int `json:"RestartCount"`
 	State        struct {
-		StartedAt string `json:"StartedAt"`
+		StartedAt string  `json:"StartedAt"`
+		Health    *Health `json:"Health,omitempty"`
 	} `json:"State"`
 	HostConfig struct {
 		Memory int64 `json:"Memory"`
 	} `json:"HostConfig"`
-	Health *struct {
-		Status string `json:"Status"`
-	} `json:"Health,omitempty"`
+}
+
+// MemoryStatsDetail holds cgroup memory fields nested under memory_stats.stats.
+// cgroup v1 uses total_inactive_file; cgroup v2 uses inactive_file.
+type MemoryStatsDetail struct {
+	InactiveFile      *uint64 `json:"inactive_file"`
+	TotalInactiveFile *uint64 `json:"total_inactive_file"`
 }
 
 // Stats is the subset of /containers/{id}/stats (one-shot) this exporter
-// needs. All disk fields are bytes; network fields are cumulative counters.
+// needs. CPU is nested under cpu_stats per the Docker API; disk fields are
+// bytes; network fields are cumulative counters.
 type Stats struct {
-	CPUUsage struct {
-		TotalUsage    uint64   `json:"total_usage"`
-		PercpuUsage   []uint64 `json:"percpu_usage"`
-		UsageInKernel uint64   `json:"usage_in_kernel"`
-		UsageInUser   uint64   `json:"usage_in_user"`
-	} `json:"cpu_usage"`
+	CPUStats struct {
+		CPUUsage struct {
+			TotalUsage        uint64 `json:"total_usage"`
+			UsageInKernelmode uint64 `json:"usage_in_kernelmode"`
+			UsageInUsermode   uint64 `json:"usage_in_usermode"`
+		} `json:"cpu_usage"`
+	} `json:"cpu_stats"`
 	MemoryStats struct {
-		Usage      uint64 `json:"usage"`
-		MaxUsage   uint64 `json:"max_usage"`
-		Limit      uint64 `json:"limit"`
-		TotalInact uint64 `json:"total_inactive_file"`
+		Usage    uint64            `json:"usage"`
+		MaxUsage uint64            `json:"max_usage"`
+		Limit    uint64            `json:"limit"`
+		Stats    MemoryStatsDetail `json:"stats"`
 	} `json:"memory_stats"`
 	Networks map[string]struct {
 		RxBytes uint64 `json:"rx_bytes"`
@@ -64,13 +75,22 @@ type Stats struct {
 	} `json:"blkio_stats"`
 	PidsStats struct {
 		Current uint64 `json:"current"`
+		Limit   uint64 `json:"limit"`
 	} `json:"pids_stats"`
 }
 
-// Client talks to the Docker API over the unix socket.
+// DockerAPI is the subset of the Docker HTTP API used to render /metrics.
+type DockerAPI interface {
+	List(ctx context.Context) ([]Container, error)
+	Inspect(ctx context.Context, id string) (*Inspect, error)
+	Stats(ctx context.Context, id string) (*Stats, error)
+}
+
+// Client talks to the Docker API over the unix socket or an HTTP base URL.
 type Client struct {
-	hc     *http.Client
-	socket string
+	hc      *http.Client
+	socket  string
+	baseURL string // non-empty in tests (httptest server URL)
 }
 
 // New returns a Client dialing the Docker API at socket with the given
@@ -87,6 +107,17 @@ func New(socket string, timeout time.Duration) *Client {
 				},
 			},
 		},
+	}
+}
+
+// NewHTTPClient returns a Client that GETs baseURL+path via hc (for tests).
+func NewHTTPClient(baseURL string, hc *http.Client) *Client {
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	return &Client{
+		hc:      hc,
+		baseURL: baseURL,
 	}
 }
 
@@ -112,20 +143,25 @@ func (c *Client) Inspect(ctx context.Context, id string) (*Inspect, error) {
 }
 
 // Stats returns the one-shot stats document for one running container.
-// stream=false is pinned so the call returns promptly instead of streaming.
+// stream=false and one-shot=true (Engine 20.10 / API 1.41+) return one sample
+// immediately instead of waiting ~1s for a second CPU priming sample.
 func (c *Client) Stats(ctx context.Context, id string) (*Stats, error) {
 	if id == "" {
 		return nil, fmt.Errorf("container has no id")
 	}
 	var out Stats
-	if err := c.get(ctx, "/containers/"+id+"/stats?stream=false", &out); err != nil {
+	if err := c.get(ctx, "/containers/"+id+"/stats?stream=false&one-shot=true", &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
 func (c *Client) get(ctx context.Context, path string, into any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker"+path, nil)
+	url := "http://docker" + path
+	if c.baseURL != "" {
+		url = c.baseURL + path
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}

@@ -1,0 +1,144 @@
+# HELP docker_health_exporter_up Whether the Docker API answered.
+# TYPE docker_health_exporter_up gauge
+docker_health_exporter_up 1
+# HELP container_health_status Docker health of the container, 1 for the current state.
+# TYPE container_health_status gauge
+container_health_status{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc",state="healthy"} 1
+# HELP container_started_time_seconds Unix time the container last started, 0 if never.
+# TYPE container_started_time_seconds gauge
+container_started_time_seconds{compose_project="stack",container="healthy_svc",name="healthy_svc"} 1.794348e+09
+# HELP container_start_time_seconds cAdvisor-named Unix start time (same value as container_started_time_seconds).
+# TYPE container_start_time_seconds gauge
+container_start_time_seconds{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 1.794348e+09
+# HELP container_last_seen Unix time of this scrape.
+# TYPE container_last_seen gauge
+container_last_seen{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 1.7e+09
+# HELP container_restart_count Docker's restart count for the container (resets when it is recreated).
+# TYPE container_restart_count counter
+container_restart_count{compose_project="stack",container="healthy_svc",name="healthy_svc"} 1
+# HELP container_cpu_usage_seconds_total Total CPU usage in seconds.
+# TYPE container_cpu_usage_seconds_total counter
+container_cpu_usage_seconds_total{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 3.5
+# HELP container_memory_working_set_bytes Working set memory (usage minus inactive file cache).
+# TYPE container_memory_working_set_bytes gauge
+container_memory_working_set_bytes{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 8.388608e+07
+# HELP container_memory_usage_bytes Total memory usage.
+# TYPE container_memory_usage_bytes gauge
+container_memory_usage_bytes{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 1.048576e+08
+# HELP container_memory_max_usage_bytes Maximum memory usage.
+# TYPE container_memory_max_usage_bytes gauge
+container_memory_max_usage_bytes{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 0
+# HELP container_spec_memory_limit_bytes Configured memory limit from inspect HostConfig.Memory.
+# TYPE container_spec_memory_limit_bytes gauge
+container_spec_memory_limit_bytes{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 5.36870912e+08
+# HELP container_network_receive_bytes_total Total network bytes received.
+# TYPE container_network_receive_bytes_total counter
+container_network_receive_bytes_total{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 1300
+# HELP container_network_transmit_bytes_total Total network bytes transmitted.
+# TYPE container_network_transmit_bytes_total counter
+container_network_transmit_bytes_total{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 2400
+# HELP container_fs_reads_bytes_total Total disk bytes read.
+# TYPE container_fs_reads_bytes_total counter
+container_fs_reads_bytes_total{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 5120
+# HELP container_fs_writes_bytes_total Total disk bytes written.
+# TYPE container_fs_writes_bytes_total counter
+container_fs_writes_bytes_total{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 8192
+# HELP container_oom_events_total OOM kills (always 0 from Docker /stats — see README).
+# TYPE container_oom_events_total counter
+container_oom_events_total{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 0
+# HELP container_threads Current thread count.
+# TYPE container_threads gauge
+container_threads{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 12
+# HELP container_threads_max Thread limit.
+# TYPE container_threads_max gauge
+container_threads_max{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 4096
+container_health_status{compose_project="standalone",compose_service="plain_svc",container="plain_svc",container_id="id-plain",image="img:2",name="plain_svc",state="running"} 1
+container_started_time_seconds{compose_project="standalone",container="plain_svc",name="plain_svc"} 1.794348e+09
+container_start_time_seconds{compose_project="standalone",compose_service="plain_svc",container="plain_svc",container_id="id-plain",image="img:2",name="plain_svc"} 1.794348e+09
+container_last_seen{compose_project="standalone",compose_service="plain_svc",container="plain_svc",container_id="id-plain",image="img:2",name="plain_svc"} 1.7e+09
+container_restart_count{compose_project="standalone",container="plain_svc",name="plain_svc"} 0
+container_cpu_usage_seconds_total{compose_project="standalone",compose_service="plain_svc",container="plain_svc",container_id="id-plain",image="img:2",name="plain_svc"} 3.5
+container_memory_working_set_bytes{compose_project="standalone",compose_service="plain_svc",container="plain_svc",container_id="id-plain",image="img:2",name="plain_svc"} 8.388608e+07
+container_memory_usage_bytes{compose_project="standalone",compose_service="plain_svc",container="plain_svc",container_id="id-plain",image="img:2",name="plain_svc"} 1.048576e+08
+container_memory_max_usage_bytes{compose_project="standalone",compose_service="plain_svc",container="plain_svc",container_id="id-plain",image="img:2",name="plain_svc"} 0
+container_spec_memory_limit_bytes{compose_project="standalone",compose_service="plain_svc",container="plain_svc",container_id="id-plain",image="img:2",name="plain_svc"} 5.36870912e+08
+container_network_receive_bytes_total{compose_project="standalone",compose_service="plain_svc",container="plain_svc",container_id="id-plain",image="img:2",name="plain_svc"} 1300
+container_network_transmit_bytes_total{compose_project="standalone",compose_service="plain_svc",container="plain_svc",container_id="id-plain",image="img:2",name="plain_svc"} 2400
+container_fs_reads_bytes_total{compose_project="standalone",compose_service="plain_svc",container="plain_svc",container_id="id-plain",image="img:2",name="plain_svc"} 5120
+container_fs_writes_bytes_total{compose_project="standalone",compose_service="plain_svc",container="plain_svc",container_id="id-plain",image="img:2",name="plain_svc"} 8192
+container_oom_events_total{compose_project="standalone",compose_service="plain_svc",container="plain_svc",container_id="id-plain",image="img:2",name="plain_svc"} 0
+container_threads{compose_project="standalone",compose_service="plain_svc",container="plain_svc",container_id="id-plain",image="img:2",name="plain_svc"} 12
+container_threads_max{compose_project="standalone",compose_service="plain_svc",container="plain_svc",container_id="id-plain",image="img:2",name="plain_svc"} 4096
+container_health_status{compose_project="standalone",compose_service="sick_svc",container="sick_svc",container_id="id-sick",image="img:3",name="sick_svc",state="unhealthy"} 1
+container_started_time_seconds{compose_project="standalone",container="sick_svc",name="sick_svc"} 1.794348e+09
+container_start_time_seconds{compose_project="standalone",compose_service="sick_svc",container="sick_svc",container_id="id-sick",image="img:3",name="sick_svc"} 1.794348e+09
+container_last_seen{compose_project="standalone",compose_service="sick_svc",container="sick_svc",container_id="id-sick",image="img:3",name="sick_svc"} 1.7e+09
+container_restart_count{compose_project="standalone",container="sick_svc",name="sick_svc"} 3
+container_cpu_usage_seconds_total{compose_project="standalone",compose_service="sick_svc",container="sick_svc",container_id="id-sick",image="img:3",name="sick_svc"} 3.5
+container_memory_working_set_bytes{compose_project="standalone",compose_service="sick_svc",container="sick_svc",container_id="id-sick",image="img:3",name="sick_svc"} 8.388608e+07
+container_memory_usage_bytes{compose_project="standalone",compose_service="sick_svc",container="sick_svc",container_id="id-sick",image="img:3",name="sick_svc"} 1.048576e+08
+container_memory_max_usage_bytes{compose_project="standalone",compose_service="sick_svc",container="sick_svc",container_id="id-sick",image="img:3",name="sick_svc"} 0
+container_spec_memory_limit_bytes{compose_project="standalone",compose_service="sick_svc",container="sick_svc",container_id="id-sick",image="img:3",name="sick_svc"} 5.36870912e+08
+container_network_receive_bytes_total{compose_project="standalone",compose_service="sick_svc",container="sick_svc",container_id="id-sick",image="img:3",name="sick_svc"} 1300
+container_network_transmit_bytes_total{compose_project="standalone",compose_service="sick_svc",container="sick_svc",container_id="id-sick",image="img:3",name="sick_svc"} 2400
+container_fs_reads_bytes_total{compose_project="standalone",compose_service="sick_svc",container="sick_svc",container_id="id-sick",image="img:3",name="sick_svc"} 5120
+container_fs_writes_bytes_total{compose_project="standalone",compose_service="sick_svc",container="sick_svc",container_id="id-sick",image="img:3",name="sick_svc"} 8192
+container_oom_events_total{compose_project="standalone",compose_service="sick_svc",container="sick_svc",container_id="id-sick",image="img:3",name="sick_svc"} 0
+container_threads{compose_project="standalone",compose_service="sick_svc",container="sick_svc",container_id="id-sick",image="img:3",name="sick_svc"} 12
+container_threads_max{compose_project="standalone",compose_service="sick_svc",container="sick_svc",container_id="id-sick",image="img:3",name="sick_svc"} 4096
+container_health_status{compose_project="standalone",compose_service="boot_svc",container="boot_svc",container_id="id-boot",image="img:4",name="boot_svc",state="starting"} 1
+container_started_time_seconds{compose_project="standalone",container="boot_svc",name="boot_svc"} 1.794348e+09
+container_start_time_seconds{compose_project="standalone",compose_service="boot_svc",container="boot_svc",container_id="id-boot",image="img:4",name="boot_svc"} 1.794348e+09
+container_last_seen{compose_project="standalone",compose_service="boot_svc",container="boot_svc",container_id="id-boot",image="img:4",name="boot_svc"} 1.7e+09
+container_restart_count{compose_project="standalone",container="boot_svc",name="boot_svc"} 0
+container_cpu_usage_seconds_total{compose_project="standalone",compose_service="boot_svc",container="boot_svc",container_id="id-boot",image="img:4",name="boot_svc"} 3.5
+container_memory_working_set_bytes{compose_project="standalone",compose_service="boot_svc",container="boot_svc",container_id="id-boot",image="img:4",name="boot_svc"} 8.388608e+07
+container_memory_usage_bytes{compose_project="standalone",compose_service="boot_svc",container="boot_svc",container_id="id-boot",image="img:4",name="boot_svc"} 1.048576e+08
+container_memory_max_usage_bytes{compose_project="standalone",compose_service="boot_svc",container="boot_svc",container_id="id-boot",image="img:4",name="boot_svc"} 0
+container_spec_memory_limit_bytes{compose_project="standalone",compose_service="boot_svc",container="boot_svc",container_id="id-boot",image="img:4",name="boot_svc"} 5.36870912e+08
+container_network_receive_bytes_total{compose_project="standalone",compose_service="boot_svc",container="boot_svc",container_id="id-boot",image="img:4",name="boot_svc"} 1300
+container_network_transmit_bytes_total{compose_project="standalone",compose_service="boot_svc",container="boot_svc",container_id="id-boot",image="img:4",name="boot_svc"} 2400
+container_fs_reads_bytes_total{compose_project="standalone",compose_service="boot_svc",container="boot_svc",container_id="id-boot",image="img:4",name="boot_svc"} 5120
+container_fs_writes_bytes_total{compose_project="standalone",compose_service="boot_svc",container="boot_svc",container_id="id-boot",image="img:4",name="boot_svc"} 8192
+container_oom_events_total{compose_project="standalone",compose_service="boot_svc",container="boot_svc",container_id="id-boot",image="img:4",name="boot_svc"} 0
+container_threads{compose_project="standalone",compose_service="boot_svc",container="boot_svc",container_id="id-boot",image="img:4",name="boot_svc"} 12
+container_threads_max{compose_project="standalone",compose_service="boot_svc",container="boot_svc",container_id="id-boot",image="img:4",name="boot_svc"} 4096
+container_health_status{compose_project="standalone",compose_service="dead_svc",container="dead_svc",container_id="id-dead",image="img:5",name="dead_svc",state="stopped"} 1
+container_started_time_seconds{compose_project="standalone",container="dead_svc",name="dead_svc"} 1.794348e+09
+container_start_time_seconds{compose_project="standalone",compose_service="dead_svc",container="dead_svc",container_id="id-dead",image="img:5",name="dead_svc"} 1.794348e+09
+container_last_seen{compose_project="standalone",compose_service="dead_svc",container="dead_svc",container_id="id-dead",image="img:5",name="dead_svc"} 1.7e+09
+container_restart_count{compose_project="standalone",container="dead_svc",name="dead_svc"} 0
+container_health_status{compose_project="myproj",compose_service="web",container="compose_web",container_id="id-compose",image="img:6",name="compose_web",state="running"} 1
+container_started_time_seconds{compose_project="myproj",container="compose_web",name="compose_web"} 1.794348e+09
+container_start_time_seconds{compose_project="myproj",compose_service="web",container="compose_web",container_id="id-compose",image="img:6",name="compose_web"} 1.794348e+09
+container_last_seen{compose_project="myproj",compose_service="web",container="compose_web",container_id="id-compose",image="img:6",name="compose_web"} 1.7e+09
+container_restart_count{compose_project="myproj",container="compose_web",name="compose_web"} 0
+container_cpu_usage_seconds_total{compose_project="myproj",compose_service="web",container="compose_web",container_id="id-compose",image="img:6",name="compose_web"} 3.5
+container_memory_working_set_bytes{compose_project="myproj",compose_service="web",container="compose_web",container_id="id-compose",image="img:6",name="compose_web"} 8.388608e+07
+container_memory_usage_bytes{compose_project="myproj",compose_service="web",container="compose_web",container_id="id-compose",image="img:6",name="compose_web"} 1.048576e+08
+container_memory_max_usage_bytes{compose_project="myproj",compose_service="web",container="compose_web",container_id="id-compose",image="img:6",name="compose_web"} 0
+container_spec_memory_limit_bytes{compose_project="myproj",compose_service="web",container="compose_web",container_id="id-compose",image="img:6",name="compose_web"} 5.36870912e+08
+container_network_receive_bytes_total{compose_project="myproj",compose_service="web",container="compose_web",container_id="id-compose",image="img:6",name="compose_web"} 1300
+container_network_transmit_bytes_total{compose_project="myproj",compose_service="web",container="compose_web",container_id="id-compose",image="img:6",name="compose_web"} 2400
+container_fs_reads_bytes_total{compose_project="myproj",compose_service="web",container="compose_web",container_id="id-compose",image="img:6",name="compose_web"} 5120
+container_fs_writes_bytes_total{compose_project="myproj",compose_service="web",container="compose_web",container_id="id-compose",image="img:6",name="compose_web"} 8192
+container_oom_events_total{compose_project="myproj",compose_service="web",container="compose_web",container_id="id-compose",image="img:6",name="compose_web"} 0
+container_threads{compose_project="myproj",compose_service="web",container="compose_web",container_id="id-compose",image="img:6",name="compose_web"} 12
+container_threads_max{compose_project="myproj",compose_service="web",container="compose_web",container_id="id-compose",image="img:6",name="compose_web"} 4096
+container_health_status{compose_project="standalone",compose_service="portainer",container="portainer",container_id="id-standalone",image="img:7",name="portainer",state="running"} 1
+container_started_time_seconds{compose_project="standalone",container="portainer",name="portainer"} 1.794348e+09
+container_start_time_seconds{compose_project="standalone",compose_service="portainer",container="portainer",container_id="id-standalone",image="img:7",name="portainer"} 1.794348e+09
+container_last_seen{compose_project="standalone",compose_service="portainer",container="portainer",container_id="id-standalone",image="img:7",name="portainer"} 1.7e+09
+container_restart_count{compose_project="standalone",container="portainer",name="portainer"} 2
+container_cpu_usage_seconds_total{compose_project="standalone",compose_service="portainer",container="portainer",container_id="id-standalone",image="img:7",name="portainer"} 3.5
+container_memory_working_set_bytes{compose_project="standalone",compose_service="portainer",container="portainer",container_id="id-standalone",image="img:7",name="portainer"} 8.388608e+07
+container_memory_usage_bytes{compose_project="standalone",compose_service="portainer",container="portainer",container_id="id-standalone",image="img:7",name="portainer"} 1.048576e+08
+container_memory_max_usage_bytes{compose_project="standalone",compose_service="portainer",container="portainer",container_id="id-standalone",image="img:7",name="portainer"} 0
+container_spec_memory_limit_bytes{compose_project="standalone",compose_service="portainer",container="portainer",container_id="id-standalone",image="img:7",name="portainer"} 5.36870912e+08
+container_network_receive_bytes_total{compose_project="standalone",compose_service="portainer",container="portainer",container_id="id-standalone",image="img:7",name="portainer"} 1300
+container_network_transmit_bytes_total{compose_project="standalone",compose_service="portainer",container="portainer",container_id="id-standalone",image="img:7",name="portainer"} 2400
+container_fs_reads_bytes_total{compose_project="standalone",compose_service="portainer",container="portainer",container_id="id-standalone",image="img:7",name="portainer"} 5120
+container_fs_writes_bytes_total{compose_project="standalone",compose_service="portainer",container="portainer",container_id="id-standalone",image="img:7",name="portainer"} 8192
+container_oom_events_total{compose_project="standalone",compose_service="portainer",container="portainer",container_id="id-standalone",image="img:7",name="portainer"} 0
+container_threads{compose_project="standalone",compose_service="portainer",container="portainer",container_id="id-standalone",image="img:7",name="portainer"} 12
+container_threads_max{compose_project="standalone",compose_service="portainer",container="portainer",container_id="id-standalone",image="img:7",name="portainer"} 4096

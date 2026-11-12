@@ -19,7 +19,7 @@
 //	container_network_receive_bytes_total,
 //	container_network_transmit_bytes_total, container_fs_reads_bytes_total,
 //	container_fs_writes_bytes_total, container_oom_events_total,
-//	container_start_time_seconds, container_last_seen
+//	container_start_time_seconds, container_last_seen (gauges; uptime uses started_time)
 //
 // Usage:
 //

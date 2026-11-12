@@ -1,0 +1,38 @@
+{
+  "cpu_stats": {
+    "cpu_usage": {
+      "total_usage": 3500000000,
+      "usage_in_kernelmode": 500000000,
+      "usage_in_usermode": 3000000000
+    }
+  },
+  "memory_stats": {
+    "usage": 104857600,
+    "max_usage": 0,
+    "limit": 536870912,
+    "stats": {
+      "inactive_file": 20971520
+    }
+  },
+  "networks": {
+    "eth0": {
+      "rx_bytes": 1000,
+      "tx_bytes": 2000
+    },
+    "eth1": {
+      "rx_bytes": 300,
+      "tx_bytes": 400
+    }
+  },
+  "blkio_stats": {
+    "io_service_bytes_recursive": [
+      {"op": "Read", "value": 4096},
+      {"op": "Write", "value": 8192},
+      {"op": "Read", "value": 1024}
+    ]
+  },
+  "pids_stats": {
+    "current": 12,
+    "limit": 4096
+  }
+}

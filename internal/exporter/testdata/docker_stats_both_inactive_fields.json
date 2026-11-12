@@ -1,0 +1,14 @@
+{
+  "cpu_stats": {
+    "cpu_usage": {
+      "total_usage": 1000000000
+    }
+  },
+  "memory_stats": {
+    "usage": 5000,
+    "stats": {
+      "inactive_file": 100,
+      "total_inactive_file": 300
+    }
+  }
+}

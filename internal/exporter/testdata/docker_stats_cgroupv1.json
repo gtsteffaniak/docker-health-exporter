@@ -1,0 +1,23 @@
+{
+  "cpu_stats": {
+    "cpu_usage": {
+      "total_usage": 1000000000
+    }
+  },
+  "memory_stats": {
+    "usage": 1000,
+    "max_usage": 900,
+    "limit": 2147483648,
+    "stats": {
+      "total_inactive_file": 200
+    }
+  },
+  "networks": {},
+  "blkio_stats": {
+    "io_service_bytes_recursive": []
+  },
+  "pids_stats": {
+    "current": 1,
+    "limit": 0
+  }
+}

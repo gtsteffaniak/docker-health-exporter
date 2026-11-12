@@ -21,43 +21,46 @@ stack actually consumes.
 | `container_restart_count` | counter | `container`, `name`, `compose_project` | Docker `RestartCount` (resets on recreate) |
 | `container_started_time_seconds` | gauge | `container`, `name`, `compose_project` | Unix time the container last started, 0 if never |
 
-`state` prefers the inspect `Health.Status` (exact); when there is no
+`state` prefers inspect `State.Health.Status` (exact); when there is no
 healthcheck it falls back to the run state, so one alert rule covers both.
 
 ### Resource usage (cAdvisor-compatible subset)
 
-The seven families actually consumed by Grafana dashboards and the
+The families actually consumed by Grafana dashboards and the
 `ContainerOOMKilled` alert. Per-CPU, scheduler, hugetlb, and throttle series
-cAdvisor ships by default are **not** emitted — nothing queries them, and
-dropping them is the point.
+cAdvisor ships by default are **not** emitted — nothing queries them.
 
 | Metric | Type | Meaning |
 |---|---|---|
 | `container_cpu_usage_seconds_total` | counter | Seconds of CPU consumed |
-| `container_memory_working_set_bytes` | gauge | Current working-set memory |
+| `container_memory_working_set_bytes` | gauge | Usage minus inactive file cache (cAdvisor working set) |
 | `container_memory_usage_bytes` | gauge | Total memory usage |
-| `container_memory_max_usage_bytes` | gauge | Peak memory usage |
-| `container_memory_limit_bytes` | gauge | Memory limit |
+| `container_memory_max_usage_bytes` | gauge | Peak memory usage (often 0 on cgroup v2) |
+| `container_spec_memory_limit_bytes` | gauge | `HostConfig.Memory` from inspect (0 = unlimited; cAdvisor may show host RAM) |
 | `container_network_receive_bytes_total` | counter | Total bytes received, summed over all interfaces |
 | `container_network_transmit_bytes_total` | counter | Total bytes transmitted |
-| `container_fs_reads_bytes_total` | counter | Total disk bytes read |
+| `container_fs_reads_bytes_total` | counter | Total disk bytes read, summed over blkio entries |
 | `container_fs_writes_bytes_total` | counter | Total disk bytes written |
-| `container_oom_events_total` | counter | OOM kills (best-effort — see below) |
-| `container_threads_max` | gauge | Current thread count |
-| `container_start_time_seconds` | counter | cAdvisor-named alias of started time |
-| `container_last_seen` | counter | Unix time of this scrape |
+| `container_oom_events_total` | counter | Always **0** from Docker `/stats` (see below) |
+| `container_threads` | gauge | Current thread count |
+| `container_threads_max` | gauge | Thread limit (`pids_stats.limit`) |
+| `container_start_time_seconds` | gauge | cAdvisor-named alias of started time |
+| `container_last_seen` | gauge | Unix time of this scrape |
 
-Usage series are only emitted for **running** containers. Stopped containers
-carry no usage for the scrape they are absent from.
+Usage series are emitted for every container in Docker **run state** `running`,
+including those reporting `healthy` / `unhealthy` / `starting` from a
+healthcheck. Stopped containers carry no usage for that scrape.
 
-### OOM caveat
+### Deliberate differences from cAdvisor
 
-Docker's `/stats` endpoint exposes no per-container OOM counter (the cgroup
-pid is needed to read `memory.events`). `container_oom_events_total` is
-therefore emitted as `0` so the alert expression stays valid instead of
-erroring on a missing metric. A future revision can source real OOMs from
-`/sys/fs/cgroup/.../docker-<id>.scope/memory.events` when the exporter runs
-with the container's cgroup path.
+| Topic | This exporter |
+|---|---|
+| `container_oom_events_total` | Always `0`: Docker `/stats` has no OOM counter (would need cgroup `memory.events`) |
+| Network / disk | Summed across all interfaces / devices — no `interface` or `device` labels |
+| Per-CPU / sched / hugetlb | Not emitted — dashboards do not query them (`container_cpu_usage_seconds_total` is emitted) |
+| `machine_*`, `cadvisor_version_info` | Not emitted |
+| Unlimited memory cap | `container_spec_memory_limit_bytes` is `0`; cgroup `memory_stats.limit` is not used when inspect says unlimited |
+| Cardinality | Far smaller than full cAdvisor |
 
 ## Usage
 
@@ -77,6 +80,8 @@ Scrape:
 ```sh
 curl -s http://localhost:9415/metrics | head
 ```
+
+Health check: `GET /healthz` returns 200.
 
 ### Compose (monitoring agent)
 
@@ -122,11 +127,11 @@ any other standard Prometheus-compatible stack.
 
 Replace the cAdvisor sidecar with this exporter and change the Alloy
 `job="cadvisor"` scrape target to `job="docker-health"` — or relabel
-`job` to `docker-health`. The seven usage families are name-, type- and
+`job` to `docker-health`. The usage families are name-, type- and
 unit-compatible, so dashboards and copy queries
 (`rate(container_cpu_usage_seconds_total[$__rate_interval])`,
 `container_memory_working_set_bytes`,
-`increase(container_oom_events_total[15m])`) keep working without edits.
+`time() - container_started_time_seconds > 0`) keep working without edits.
 The one deliberate difference is cardinality: this exporter emits far fewer
 series (no per-CPU, sched, hugetlb, or throttle breakdowns), which is the
 point — on a 1 GiB VPS that is the difference between ~63 MiB (cAdvisor) and
@@ -135,11 +140,14 @@ point — on a 1 GiB VPS that is the difference between ~63 MiB (cAdvisor) and
 ## Development
 
 ```sh
+gofmt -w .
 go vet ./...
-go test ./...
+go test -race ./...
 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tmp/dhe ./cmd/docker-health-exporter
 docker build -t docker-health-exporter .
 ```
+
+Golden regression output: see `internal/exporter/testdata/README.md`.
 
 ## Layout
 
