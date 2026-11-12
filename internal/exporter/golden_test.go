@@ -92,7 +92,7 @@ func TestEmitUsageOOMCounterPresent(t *testing.T) {
 		"name": "x", "container": "x", "container_id": "id", "image": "i",
 		"compose_project": "standalone", "compose_service": "x",
 	}
-	emitUsage(enc, labels, &Stats{})
+	emitUsage(enc, labels, &Stats{}, nil)
 	out := buf.String()
 	if !strings.Contains(out, "# TYPE container_oom_events_total counter") {
 		t.Fatal("missing oom TYPE")

@@ -39,6 +39,13 @@ type Inspect struct {
 	} `json:"HostConfig"`
 }
 
+// MemoryStatsDetail holds cgroup memory fields nested under memory_stats.stats.
+// cgroup v1 uses total_inactive_file; cgroup v2 uses inactive_file.
+type MemoryStatsDetail struct {
+	InactiveFile      *uint64 `json:"inactive_file"`
+	TotalInactiveFile *uint64 `json:"total_inactive_file"`
+}
+
 // Stats is the subset of /containers/{id}/stats (one-shot) this exporter
 // needs. CPU is nested under cpu_stats per the Docker API; disk fields are
 // bytes; network fields are cumulative counters.
@@ -51,13 +58,10 @@ type Stats struct {
 		} `json:"cpu_usage"`
 	} `json:"cpu_stats"`
 	MemoryStats struct {
-		Usage    uint64 `json:"usage"`
-		MaxUsage uint64 `json:"max_usage"`
-		Limit    uint64 `json:"limit"`
-		Stats    struct {
-			InactiveFile uint64 `json:"inactive_file"`
-		} `json:"stats"`
-		TotalInactiveFile uint64 `json:"total_inactive_file"`
+		Usage    uint64            `json:"usage"`
+		MaxUsage uint64            `json:"max_usage"`
+		Limit    uint64            `json:"limit"`
+		Stats    MemoryStatsDetail `json:"stats"`
 	} `json:"memory_stats"`
 	Networks map[string]struct {
 		RxBytes uint64 `json:"rx_bytes"`
@@ -139,13 +143,14 @@ func (c *Client) Inspect(ctx context.Context, id string) (*Inspect, error) {
 }
 
 // Stats returns the one-shot stats document for one running container.
-// stream=false is pinned so the call returns promptly instead of streaming.
+// stream=false and one-shot=true (Engine 20.10 / API 1.41+) return one sample
+// immediately instead of waiting ~1s for a second CPU priming sample.
 func (c *Client) Stats(ctx context.Context, id string) (*Stats, error) {
 	if id == "" {
 		return nil, fmt.Errorf("container has no id")
 	}
 	var out Stats
-	if err := c.get(ctx, "/containers/"+id+"/stats?stream=false", &out); err != nil {
+	if err := c.get(ctx, "/containers/"+id+"/stats?stream=false&one-shot=true", &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

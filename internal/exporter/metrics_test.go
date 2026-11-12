@@ -79,27 +79,80 @@ func TestWorkingSetBytesInactiveFile(t *testing.T) {
 	if err := json.Unmarshal(raw, &s); err != nil {
 		t.Fatal(err)
 	}
-	want := s.MemoryStats.Usage - s.MemoryStats.Stats.InactiveFile
+	inactive := inactiveFileBytes(&s)
+	want := s.MemoryStats.Usage - inactive
 	if got := WorkingSetBytes(&s); got != want {
 		t.Errorf("WorkingSetBytes = %d, want %d (usage - inactive_file)", got, want)
 	}
 }
 
-func TestWorkingSetBytesCgroupV1Fallback(t *testing.T) {
-	s := &Stats{}
-	s.MemoryStats.Usage = 1000
-	s.MemoryStats.TotalInactiveFile = 200
-	if got := WorkingSetBytes(s); got != 800 {
+func TestWorkingSetBytesCgroupV1JSON(t *testing.T) {
+	raw := readTestdata(t, "docker_stats_cgroupv1.json")
+	var s Stats
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.MemoryStats.Stats.TotalInactiveFile == nil || *s.MemoryStats.Stats.TotalInactiveFile != 200 {
+		t.Fatal("expected v1 total_inactive_file unmarshalled under stats")
+	}
+	if got := WorkingSetBytes(&s); got != 800 {
 		t.Errorf("got %d, want 800", got)
 	}
 }
 
+func TestInactiveFileV1PrecedenceWhenBothPresent(t *testing.T) {
+	raw := readTestdata(t, "docker_stats_both_inactive_fields.json")
+	var s Stats
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	if got := inactiveFileBytes(&s); got != 300 {
+		t.Errorf("inactive = %d, want v1 total_inactive_file 300", got)
+	}
+	if got := WorkingSetBytes(&s); got != 4700 {
+		t.Errorf("working set = %d, want 4700", got)
+	}
+}
+
+func TestInactiveFileV1ZeroStillUsed(t *testing.T) {
+	zero := uint64(0)
+	s := &Stats{}
+	s.MemoryStats.Usage = 1000
+	hundred := uint64(100)
+	s.MemoryStats.Stats.TotalInactiveFile = &zero
+	s.MemoryStats.Stats.InactiveFile = &hundred
+	if got := inactiveFileBytes(s); got != 0 {
+		t.Errorf("v1 zero must win over v2: got %d", got)
+	}
+	if got := WorkingSetBytes(s); got != 1000 {
+		t.Errorf("working set = %d, want 1000", got)
+	}
+}
+
 func TestWorkingSetBytesFloorAtZero(t *testing.T) {
+	fiveHundred := uint64(500)
 	s := &Stats{}
 	s.MemoryStats.Usage = 100
-	s.MemoryStats.Stats.InactiveFile = 500
+	s.MemoryStats.Stats.InactiveFile = &fiveHundred
 	if got := WorkingSetBytes(s); got != 0 {
 		t.Errorf("got %d, want 0", got)
+	}
+}
+
+func TestSpecMemoryLimitBytes(t *testing.T) {
+	var in Inspect
+	in.HostConfig.Memory = 536870912
+	if got := SpecMemoryLimitBytes(&in, nil); got != 536870912 {
+		t.Errorf("inspect limit = %d", got)
+	}
+	in.HostConfig.Memory = 0
+	if got := SpecMemoryLimitBytes(&in, nil); got != 0 {
+		t.Errorf("unlimited should be 0, got %d", got)
+	}
+	s := &Stats{}
+	s.MemoryStats.Limit = 999
+	if got := SpecMemoryLimitBytes(nil, s); got != 999 {
+		t.Errorf("nil inspect fallback = %d", got)
 	}
 }
 

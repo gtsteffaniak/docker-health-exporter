@@ -134,16 +134,40 @@ func CPUSecs(s *Stats) float64 {
 	return float64(s.CPUStats.CPUUsage.TotalUsage) / 1e9
 }
 
-// inactiveFileBytes returns page-cache inactive file bytes from a stats doc
-// (cgroup v2: memory_stats.stats.inactive_file; v1: total_inactive_file).
+// inactiveFileBytes returns page-cache inactive file bytes from a stats doc.
+// cgroup v1 sets memory_stats.stats.total_inactive_file; v2 sets
+// memory_stats.stats.inactive_file. When both keys are present, v1 wins
+// (including when total_inactive_file is 0).
 func inactiveFileBytes(s *Stats) uint64 {
 	if s == nil {
 		return 0
 	}
-	if v := s.MemoryStats.Stats.InactiveFile; v != 0 {
-		return v
+	st := s.MemoryStats.Stats
+	if st.TotalInactiveFile != nil {
+		return *st.TotalInactiveFile
 	}
-	return s.MemoryStats.TotalInactiveFile
+	if st.InactiveFile != nil {
+		return *st.InactiveFile
+	}
+	return 0
+}
+
+// SpecMemoryLimitBytes is the configured limit for container_spec_memory_limit_bytes.
+// cAdvisor reads HostConfig.Memory from inspect, not memory_stats.limit (which
+// reflects host RAM when the container has no cap). When inspect is missing,
+// memory_stats.limit is a best-effort fallback. HostConfig.Memory == 0 means
+// unlimited; this exporter emits 0 (cAdvisor may report machine memory).
+func SpecMemoryLimitBytes(insp *Inspect, stats *Stats) uint64 {
+	if insp != nil {
+		if insp.HostConfig.Memory > 0 {
+			return uint64(insp.HostConfig.Memory)
+		}
+		return 0
+	}
+	if stats != nil {
+		return stats.MemoryStats.Limit
+	}
+	return 0
 }
 
 // WorkingSetBytes matches cAdvisor container_memory_working_set_bytes:

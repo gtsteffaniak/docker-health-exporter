@@ -36,7 +36,7 @@ cAdvisor ships by default are **not** emitted — nothing queries them.
 | `container_memory_working_set_bytes` | gauge | Usage minus inactive file cache (cAdvisor working set) |
 | `container_memory_usage_bytes` | gauge | Total memory usage |
 | `container_memory_max_usage_bytes` | gauge | Peak memory usage (often 0 on cgroup v2) |
-| `container_spec_memory_limit_bytes` | gauge | Memory limit (`container_spec_memory_limit_bytes` in cAdvisor) |
+| `container_spec_memory_limit_bytes` | gauge | `HostConfig.Memory` from inspect (0 = unlimited; cAdvisor may show host RAM) |
 | `container_network_receive_bytes_total` | counter | Total bytes received, summed over all interfaces |
 | `container_network_transmit_bytes_total` | counter | Total bytes transmitted |
 | `container_fs_reads_bytes_total` | counter | Total disk bytes read, summed over blkio entries |
@@ -57,8 +57,9 @@ healthcheck. Stopped containers carry no usage for that scrape.
 |---|---|
 | `container_oom_events_total` | Always `0`: Docker `/stats` has no OOM counter (would need cgroup `memory.events`) |
 | Network / disk | Summed across all interfaces / devices — no `interface` or `device` labels |
-| CPU / sched / hugetlb | Not emitted — dashboards do not query them |
+| Per-CPU / sched / hugetlb | Not emitted — dashboards do not query them (`container_cpu_usage_seconds_total` is emitted) |
 | `machine_*`, `cadvisor_version_info` | Not emitted |
+| Unlimited memory cap | `container_spec_memory_limit_bytes` is `0`; cgroup `memory_stats.limit` is not used when inspect says unlimited |
 | Cardinality | Far smaller than full cAdvisor |
 
 ## Usage

@@ -28,7 +28,7 @@ container_memory_usage_bytes{compose_project="stack",compose_service="healthy_sv
 # HELP container_memory_max_usage_bytes Maximum memory usage.
 # TYPE container_memory_max_usage_bytes gauge
 container_memory_max_usage_bytes{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 0
-# HELP container_spec_memory_limit_bytes Memory limit (cAdvisor container_spec_memory_limit_bytes).
+# HELP container_spec_memory_limit_bytes Configured memory limit from inspect HostConfig.Memory.
 # TYPE container_spec_memory_limit_bytes gauge
 container_spec_memory_limit_bytes{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 5.36870912e+08
 # HELP container_network_receive_bytes_total Total network bytes received.

@@ -99,7 +99,7 @@ func (s *Server) ServeMetrics(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				log.Printf("stats %s: %v", name, err)
 			} else {
-				emitUsage(enc, labels, stats)
+				emitUsage(enc, labels, stats, insp)
 			}
 		}
 	}
@@ -111,7 +111,7 @@ func (s *Server) ServeMetrics(w http.ResponseWriter, r *http.Request) {
 // ContainerOOMKilled alert are emitted. cAdvisor's long tail (per-CPU,
 // sched, hugetlb, throttling, process stats) is omitted by config on both
 // ends, so there is nothing to drop.
-func emitUsage(enc *prom.Encoder, labels map[string]string, s *Stats) {
+func emitUsage(enc *prom.Encoder, labels map[string]string, s *Stats, insp *Inspect) {
 	usageLabels := map[string]string{
 		"name":            labels["name"],
 		"container":       labels["container"],
@@ -131,7 +131,8 @@ func emitUsage(enc *prom.Encoder, labels map[string]string, s *Stats) {
 	enc.Gauge("container_memory_max_usage_bytes",
 		"Maximum memory usage.", usageLabels, float64(s.MemoryStats.MaxUsage))
 	enc.Gauge("container_spec_memory_limit_bytes",
-		"Memory limit (cAdvisor container_spec_memory_limit_bytes).", usageLabels, float64(s.MemoryStats.Limit))
+		"Configured memory limit from inspect HostConfig.Memory.", usageLabels,
+		float64(SpecMemoryLimitBytes(insp, s)))
 
 	rx, tx := NetworkIO(s)
 	enc.Counter("container_network_receive_bytes_total",

@@ -20,6 +20,10 @@ func (f *fakeDocker) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/containers/json" && r.Method == http.MethodGet:
+			if r.URL.Query().Get("all") != "1" {
+				http.Error(w, "expected all=1", http.StatusBadRequest)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(f.list)
 		case strings.HasSuffix(r.URL.Path, "/json") && r.Method == http.MethodGet:
@@ -32,6 +36,11 @@ func (f *fakeDocker) handler() http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(raw)
 		case strings.Contains(r.URL.Path, "/stats") && r.Method == http.MethodGet:
+			q := r.URL.Query()
+			if q.Get("stream") != "false" || q.Get("one-shot") != "true" {
+				http.Error(w, "expected stream=false&one-shot=true", http.StatusBadRequest)
+				return
+			}
 			path := strings.TrimPrefix(r.URL.Path, "/containers/")
 			id, _, _ := strings.Cut(path, "/stats")
 			raw, ok := f.stats[id]
@@ -75,7 +84,7 @@ func regressionFixture(t *testing.T) *fakeDocker {
 		if hasHealth {
 			h = `,"Health":{"Status":"` + healthStatus + `"}`
 		}
-		return json.RawMessage(`{"RestartCount":` + itoa(restarts) + `,"State":{"StartedAt":"` + started + `"` + h + `}}`)
+		return json.RawMessage(`{"RestartCount":` + itoa(restarts) + `,"State":{"StartedAt":"` + started + `"` + h + `},"HostConfig":{"Memory":536870912}}`)
 	}
 	return &fakeDocker{
 		list: []Container{
