@@ -1,19 +1,27 @@
 package exporter
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
-func TestOOMStoreIncrement(t *testing.T) {
+func TestOOMStoreRecordOOM(t *testing.T) {
 	s := NewOOMStore()
-	s.Increment("id-a")
-	s.Increment("id-a")
+	s.RecordOOM("id-a", 100)
+	s.RecordOOM("id-a", 200)
 	if got := s.Count("id-a"); got != 2 {
 		t.Fatalf("count = %d, want 2", got)
+	}
+	s.RecordOOM("id-a", 100)
+	if got := s.Count("id-a"); got != 2 {
+		t.Fatalf("dedupe changed count = %d, want 2", got)
 	}
 	if got := s.Count("missing"); got != 0 {
 		t.Fatalf("missing = %d, want 0", got)
@@ -38,15 +46,52 @@ func TestTwoOOMEventsCumulative(t *testing.T) {
 	f.events = make(chan []byte, 4)
 	srv, _, _ := newTestServerWithEvents(t, f, time.Unix(fixedScrapeUnix, 0))
 
-	f.events <- marshalEventLine(t, dockerOOMEvent("id-healthy", "healthy_svc"))
+	f.events <- marshalEventLine(t, dockerOOMEventAt("id-healthy", "healthy_svc", 1))
 	waitForOOMCount(t, srv, "id-healthy", 1)
 	body := scrapeServer(t, srv)
 	assertMetric(t, body, `container_oom_events_total{.*name="healthy_svc".*} 1`)
 
-	f.events <- marshalEventLine(t, dockerOOMEvent("id-healthy", "healthy_svc"))
+	f.events <- marshalEventLine(t, dockerOOMEventAt("id-healthy", "healthy_svc", 2))
 	waitForOOMCount(t, srv, "id-healthy", 2)
 	body = scrapeServer(t, srv)
 	assertMetric(t, body, `container_oom_events_total{.*name="healthy_svc".*} 2`)
+}
+
+func TestOOMEventOnStoppedContainerScraped(t *testing.T) {
+	f := regressionFixture(t)
+	f.events = make(chan []byte, 4)
+	srv, _, _ := newTestServerWithEvents(t, f, time.Unix(fixedScrapeUnix, 0))
+
+	f.events <- marshalEventLine(t, dockerOOMEventAt("id-dead", "dead_svc", 99))
+	waitForOOMCount(t, srv, "id-dead", 1)
+
+	body := scrapeServer(t, srv)
+	assertMetric(t, body, `container_oom_events_total{.*compose_service="dead_svc".*name="dead_svc".*} 1`)
+	assertNoMetricForContainer(t, body, "dead_svc", "container_cpu_usage_seconds_total")
+}
+
+func TestReconnectReplayDoesNotDoubleCount(t *testing.T) {
+	const tn = int64(1700000000123456789)
+	line := []byte(`{"Type":"container","Action":"oom","Actor":{"ID":"id-replay"},"timeNano":` +
+		strconv.FormatInt(tn, 10) + `}` + "\n")
+	client := &replayEventsClient{lines: [][]byte{line, line}}
+	store := NewOOMStore()
+	var lastNano atomic.Int64
+
+	ctx := context.Background()
+	if err := watchOOMStream(ctx, client, store, time.Time{}, &lastNano); err != nil && err != io.EOF {
+		t.Fatalf("first stream: %v", err)
+	}
+	if got := store.Count("id-replay"); got != 1 {
+		t.Fatalf("after first stream count = %d", got)
+	}
+	since := time.Unix(0, lastNano.Load()+1)
+	if err := watchOOMStream(ctx, client, store, since, &lastNano); err != nil && err != io.EOF {
+		t.Fatalf("reconnect stream: %v", err)
+	}
+	if got := store.Count("id-replay"); got != 1 {
+		t.Fatalf("after replay count = %d, want 1", got)
+	}
 }
 
 func TestNonOOMEventsIgnored(t *testing.T) {
@@ -111,6 +156,10 @@ func TestEventsPathFiltersOOMOnly(t *testing.T) {
 }
 
 func dockerOOMEvent(id, name string) map[string]any {
+	return dockerOOMEventAt(id, name, time.Now().UnixNano())
+}
+
+func dockerOOMEventAt(id, name string, timeNano int64) map[string]any {
 	return map[string]any{
 		"Type":   "container",
 		"Action": "oom",
@@ -120,9 +169,22 @@ func dockerOOMEvent(id, name string) map[string]any {
 				"name": name,
 			},
 		},
-		"time":     time.Now().Unix(),
-		"timeNano": time.Now().UnixNano(),
+		"time":     timeNano / 1_000_000_000,
+		"timeNano": timeNano,
 	}
+}
+
+type replayEventsClient struct {
+	lines [][]byte
+	calls atomic.Int32
+}
+
+func (r *replayEventsClient) Events(_ context.Context, _ time.Time) (io.ReadCloser, error) {
+	i := int(r.calls.Add(1)) - 1
+	if i >= len(r.lines) {
+		i = len(r.lines) - 1
+	}
+	return io.NopCloser(strings.NewReader(string(r.lines[i]))), nil
 }
 
 func waitForOOMCount(t *testing.T, srv *Server, id string, want uint64) {

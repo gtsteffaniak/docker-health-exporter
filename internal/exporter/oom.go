@@ -32,11 +32,15 @@ type DockerEvent struct {
 type OOMStore struct {
 	mu     sync.RWMutex
 	counts map[string]uint64
+	seen   map[string]map[int64]struct{} // container ID -> event TimeNano
 }
 
 // NewOOMStore returns an empty OOM counter store.
 func NewOOMStore() *OOMStore {
-	return &OOMStore{counts: make(map[string]uint64)}
+	return &OOMStore{
+		counts: make(map[string]uint64),
+		seen:   make(map[string]map[int64]struct{}),
+	}
 }
 
 // Count returns the cumulative oom events for containerID (0 if none).
@@ -49,14 +53,37 @@ func (s *OOMStore) Count(containerID string) uint64 {
 	return s.counts[containerID]
 }
 
-// Increment adds one to the oom counter for containerID.
-func (s *OOMStore) Increment(containerID string) {
+// RecordOOM increments the oom counter unless this (containerID, timeNano) was
+// already recorded (reconnect replay dedupe). timeNano may be 0 when Docker
+// omits it; those events are counted without dedupe.
+func (s *OOMStore) RecordOOM(containerID string, timeNano int64) {
 	if s == nil || containerID == "" {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if timeNano > 0 {
+		m := s.seen[containerID]
+		if m == nil {
+			m = make(map[int64]struct{})
+			s.seen[containerID] = m
+		}
+		if _, dup := m[timeNano]; dup {
+			return
+		}
+		m[timeNano] = struct{}{}
+	}
 	s.counts[containerID]++
+}
+
+func eventTimeNano(ev DockerEvent) int64 {
+	if ev.TimeNano > 0 {
+		return ev.TimeNano
+	}
+	if ev.Time > 0 {
+		return ev.Time * 1_000_000_000
+	}
+	return 0
 }
 
 // EventsClient is the Docker /events stream used by the OOM watcher.
@@ -72,7 +99,7 @@ func RunOOMWatcher(ctx context.Context, client EventsClient, store *OOMStore) {
 	if client == nil || store == nil {
 		return
 	}
-	var sinceUnix atomic.Int64
+	var lastEventNano atomic.Int64
 	backoff := time.Second
 	const maxBackoff = 30 * time.Second
 
@@ -81,10 +108,12 @@ func RunOOMWatcher(ctx context.Context, client EventsClient, store *OOMStore) {
 			return
 		}
 		var since time.Time
-		if t := sinceUnix.Load(); t > 0 {
-			since = time.Unix(t, 0)
+		if t := lastEventNano.Load(); t > 0 {
+			// Strictly after the last processed event so Docker's inclusive
+			// since filter does not replay the same oom on reconnect.
+			since = time.Unix(0, t+1)
 		}
-		err := watchOOMStream(ctx, client, store, since, &sinceUnix)
+		err := watchOOMStream(ctx, client, store, since, &lastEventNano)
 		if ctx.Err() != nil {
 			return
 		}
@@ -107,7 +136,7 @@ func RunOOMWatcher(ctx context.Context, client EventsClient, store *OOMStore) {
 	}
 }
 
-func watchOOMStream(ctx context.Context, client EventsClient, store *OOMStore, since time.Time, sinceUnix *atomic.Int64) error {
+func watchOOMStream(ctx context.Context, client EventsClient, store *OOMStore, since time.Time, lastEventNano *atomic.Int64) error {
 	body, err := client.Events(ctx, since)
 	if err != nil {
 		return err
@@ -135,8 +164,17 @@ func watchOOMStream(ctx context.Context, client EventsClient, store *OOMStore, s
 		if !strings.EqualFold(ev.Type, "container") {
 			continue
 		}
-		if ev.Time > 0 {
-			sinceUnix.Store(ev.Time)
+		tn := eventTimeNano(ev)
+		if tn > 0 {
+			for {
+				prev := lastEventNano.Load()
+				if tn <= prev {
+					break
+				}
+				if lastEventNano.CompareAndSwap(prev, tn) {
+					break
+				}
+			}
 		}
 		if !strings.EqualFold(ev.Action, "oom") {
 			continue
@@ -145,7 +183,7 @@ func watchOOMStream(ctx context.Context, client EventsClient, store *OOMStore, s
 		if id == "" {
 			continue
 		}
-		store.Increment(id)
+		store.RecordOOM(id, tn)
 	}
 	if err := sc.Err(); err != nil {
 		return err

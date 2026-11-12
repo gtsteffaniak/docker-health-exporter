@@ -47,9 +47,13 @@ cAdvisor ships by default are **not** emitted — nothing queries them.
 | `container_start_time_seconds` | gauge | cAdvisor-named alias of started time |
 | `container_last_seen` | gauge | Unix time of this scrape |
 
-Usage series are emitted for every container in Docker **run state** `running`,
-including those reporting `healthy` / `unhealthy` / `starting` from a
-healthcheck. Stopped containers carry no usage for that scrape.
+Usage series (CPU, memory, network, disk, threads) are emitted for every
+container in Docker **run state** `running`, including those reporting
+`healthy` / `unhealthy` / `starting` from a healthcheck. Stopped containers
+carry no usage for that scrape. **`container_oom_events_total` is emitted for
+every container Docker lists** (running or stopped) so
+`increase(container_oom_events_total[15m])` fires even when the container stays
+exited after an OOM.
 
 ### Deliberate differences from cAdvisor
 

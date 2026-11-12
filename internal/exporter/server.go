@@ -140,6 +140,12 @@ func (s *Server) ServeMetrics(w http.ResponseWriter, r *http.Request) {
 				lifecycleLabels, float64(insp.RestartCount))
 		}
 
+		var oom uint64
+		if s.oomStore != nil {
+			oom = s.oomStore.Count(c.ID)
+		}
+		emitOOMEvents(enc, labels, oom)
+
 		// Usage for every Docker-running container, including healthchecked
 		// ones (healthy/unhealthy/starting). Health state is not run state.
 		if IsRunning(c) {
@@ -147,14 +153,26 @@ func (s *Server) ServeMetrics(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				log.Printf("stats %s: %v", name, err)
 			} else {
-				var oom uint64
-				if s.oomStore != nil {
-					oom = s.oomStore.Count(c.ID)
-				}
-				emitUsage(enc, labels, stats, insp, oom)
+				emitUsage(enc, labels, stats, insp)
 			}
 		}
 	}
+}
+
+// emitOOMEvents writes container_oom_events_total for any container Docker lists,
+// including stopped/exited, so increase() fires even when the container stays down.
+func emitOOMEvents(enc *prom.Encoder, labels map[string]string, oomEvents uint64) {
+	usageLabels := map[string]string{
+		"name":            labels["name"],
+		"container":       labels["container"],
+		"container_id":    labels["container_id"],
+		"image":           labels["image"],
+		"compose_project": labels["compose_project"],
+		"compose_service": labels["compose_service"],
+	}
+	enc.Counter("container_oom_events_total",
+		"Cumulative Docker container oom events (Engine /events Action oom).",
+		usageLabels, float64(oomEvents))
 }
 
 // emitUsage writes the cAdvisor-compatible usage families for one container.
@@ -163,7 +181,7 @@ func (s *Server) ServeMetrics(w http.ResponseWriter, r *http.Request) {
 // ContainerOOMKilled alert are emitted. cAdvisor's long tail (per-CPU,
 // sched, hugetlb, throttling, process stats) is omitted by config on both
 // ends, so there is nothing to drop.
-func emitUsage(enc *prom.Encoder, labels map[string]string, s *Stats, insp *Inspect, oomEvents uint64) {
+func emitUsage(enc *prom.Encoder, labels map[string]string, s *Stats, insp *Inspect) {
 	usageLabels := map[string]string{
 		"name":            labels["name"],
 		"container":       labels["container"],
@@ -197,9 +215,6 @@ func emitUsage(enc *prom.Encoder, labels map[string]string, s *Stats, insp *Insp
 		"Total disk bytes read.", usageLabels, float64(reads))
 	enc.Counter("container_fs_writes_bytes_total",
 		"Total disk bytes written.", usageLabels, float64(writes))
-
-	enc.Counter("container_oom_events_total",
-		"Cumulative Docker container oom events (Engine /events Action oom).", usageLabels, float64(oomEvents))
 
 	enc.Gauge("container_threads",
 		"Current thread count.", usageLabels, float64(s.PidsStats.Current))
