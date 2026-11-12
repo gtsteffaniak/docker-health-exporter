@@ -5,9 +5,11 @@ plus cAdvisor-compatible resource usage** from the Docker API over the unix
 socket — with no housekeeper daemon, no cgroup parsing, and no third-party
 dependencies.
 
-The health/restart metrics originated from
+It was extracted from the monitoring agent (`monitoring/docker-health-exporter`
+in `gportal` / `proxy-service` / `monitoring`) when it grew the usage metrics
+that used to come from cAdvisor. The health/restart metrics originated from
 [`scrape_insert_influxdb`](https://github.com/gtsteffaniak/scrape_insert_influxdb)'s
-`dockerStats`, the usage metrics replicate the subset of cAdvisor that the
+`dockerStats` leg; the usage metrics replicate the subset of cAdvisor that the
 stack actually consumes.
 
 ## What it exposes
@@ -21,76 +23,129 @@ stack actually consumes.
 | `container_restart_count` | counter | `container`, `name`, `compose_project` | Docker `RestartCount` (resets on recreate) |
 | `container_started_time_seconds` | gauge | `container`, `name`, `compose_project` | Unix time the container last started, 0 if never |
 
-`state` prefers inspect `State.Health.Status` (exact); when there is no
+`state` prefers the inspect `Health.Status` (exact); when there is no
 healthcheck it falls back to the run state, so one alert rule covers both.
 
 ### Resource usage (cAdvisor-compatible subset)
 
-The families actually consumed by Grafana dashboards and the
+The seven families actually consumed by Grafana dashboards and the
 `ContainerOOMKilled` alert. Per-CPU, scheduler, hugetlb, and throttle series
-cAdvisor ships by default are **not** emitted — nothing queries them.
+cAdvisor ships by default are **not** emitted — nothing queries them, and
+dropping them is the point.
 
 | Metric | Type | Meaning |
 |---|---|---|
 | `container_cpu_usage_seconds_total` | counter | Seconds of CPU consumed |
-| `container_memory_working_set_bytes` | gauge | Usage minus inactive file cache (cAdvisor working set) |
+| `container_memory_working_set_bytes` | gauge | Current working-set memory |
 | `container_memory_usage_bytes` | gauge | Total memory usage |
-| `container_memory_max_usage_bytes` | gauge | Peak memory usage (often 0 on cgroup v2) |
-| `container_spec_memory_limit_bytes` | gauge | `HostConfig.Memory` from inspect (0 = unlimited; cAdvisor may show host RAM) |
+| `container_memory_max_usage_bytes` | gauge | Peak memory usage |
+| `container_memory_limit_bytes` | gauge | Memory limit |
 | `container_network_receive_bytes_total` | counter | Total bytes received, summed over all interfaces |
 | `container_network_transmit_bytes_total` | counter | Total bytes transmitted |
-| `container_fs_reads_bytes_total` | counter | Total disk bytes read, summed over blkio entries |
+| `container_fs_reads_bytes_total` | counter | Total disk bytes read |
 | `container_fs_writes_bytes_total` | counter | Total disk bytes written |
-| `container_oom_events_total` | counter | Always **0** from Docker `/stats` (see below) |
-| `container_threads` | gauge | Current thread count |
-| `container_threads_max` | gauge | Thread limit (`pids_stats.limit`) |
-| `container_start_time_seconds` | gauge | cAdvisor-named alias of started time |
-| `container_last_seen` | gauge | Unix time of this scrape |
+| `container_oom_events_total` | counter | OOM kills (best-effort — see below) |
+| `container_threads_max` | gauge | Current thread count |
+| `container_start_time_seconds` | counter | cAdvisor-named alias of started time |
+| `container_last_seen` | counter | Unix time of this scrape |
 
-Usage series are emitted for every container in Docker **run state** `running`,
-including those reporting `healthy` / `unhealthy` / `starting` from a
-healthcheck. Stopped containers carry no usage for that scrape.
+Usage series are only emitted for **running** containers. Stopped containers
+carry no usage for the scrape they are absent from.
 
-### Deliberate differences from cAdvisor
+### OOM caveat
 
-| Topic | This exporter |
-|---|---|
-| `container_oom_events_total` | Always `0`: Docker `/stats` has no OOM counter (would need cgroup `memory.events`) |
-| Network / disk | Summed across all interfaces / devices — no `interface` or `device` labels |
-| Per-CPU / sched / hugetlb | Not emitted — dashboards do not query them (`container_cpu_usage_seconds_total` is emitted) |
-| `machine_*`, `cadvisor_version_info` | Not emitted |
-| Unlimited memory cap | `container_spec_memory_limit_bytes` is `0`; cgroup `memory_stats.limit` is not used when inspect says unlimited |
-| Cardinality | Far smaller than full cAdvisor |
+Docker's `/stats` endpoint exposes no per-container OOM counter (the cgroup
+pid is needed to read `memory.events`). `container_oom_events_total` is
+therefore emitted as `0` so the alert expression stays valid instead of
+erroring on a missing metric. A future revision can source real OOMs from
+`/sys/fs/cgroup/.../docker-<id>.scope/memory.events` when the exporter runs
+with the container's cgroup path.
 
 ## Usage
 
 ```sh
-# Terminal/run directly
+# Terminal/run directly (host user must be in the docker group, or root)
 docker-health-exporter -listen :9415
 
-# Docker (socket is the only mount)
+# Docker: non-root (image default user is nobody)
+GID=$(getent group docker | cut -d: -f3)
 docker run -d --name docker-health-exporter \
   -p 127.0.0.1:9415:9415 \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
-  gtsteffaniak/docker-health-exporter:latest
+  --group-add "$GID" \
+  gtstef/docker-health-exporter:latest
 ```
 
 Scrape:
 
 ```sh
 curl -s http://localhost:9415/metrics | head
+# docker_health_exporter_up 1  → socket access OK
 ```
 
-Health check: `GET /healthz` returns 200.
+### Running without root
+
+The image runs as **`nobody` (UID 65534)**. Do **not** set `user: root` in
+Compose unless you accept full host impact if the exporter is compromised.
+
+Access to `/var/run/docker.sock` is a **Unix file permission**, not a network
+capability. `CAP_NET_*` and similar caps do **not** grant socket access.
+`CAP_DAC_OVERRIDE` can bypass permissions but is broader than membership in the
+`docker` group and is a poor tradeoff here.
+
+**Recommended — supplemental `docker` group (Compose):**
+
+```yaml
+docker-health-exporter:
+  image: gtstef/docker-health-exporter:latest
+  restart: unless-stopped
+  mem_limit: 64m
+  group_add:
+    - "${DOCKER_GID:?host docker group GID — getent group docker | cut -d: -f3}"
+  ports:
+    - 127.0.0.1:9415:9415
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock:ro
+```
+
+Set `DOCKER_GID` in `.env` to the **numeric** GID from the host (the group name
+`docker` often does not exist inside the Alpine image).
+
+**Equivalent — `docker run`:**
+
+```sh
+docker run ... --group-add "$(getent group docker | cut -d: -f3)" ...
+```
+
+**Alternative — primary group instead of `group_add`:**
+
+```yaml
+user: "65534:998" # nobody + host docker GID
+```
+
+**Alternative — Docker socket proxy:** run a filtered proxy container that
+holds the socket and expose a narrow HTTP API; point the exporter at that URL
+( `-docker-socket` is unix-only today — proxy setups usually front the socket
+with a sidecar and are heavier than `group_add`).
+
+**Security note:** members of the `docker` group can effectively act as root on
+the host via the Engine API. This sidecar still needs that access; `group_add`
+limits the blast radius to this one static binary instead of every process in
+a root-namespaced container.
+
+**Grafana Alloy** on the same hosts uses the image's `alloy` user (UID **473**)
+with the same `DOCKER_GID`, plus `cap_add: [NET_RAW]` for ICMP probes — see the
+monitoring repo README ("Alloy permissions").
 
 ### Compose (monitoring agent)
 
 ```yaml
 docker-health-exporter:
-  image: gtsteffaniak/docker-health-exporter:latest
+  image: gtstef/docker-health-exporter:latest
   restart: unless-stopped
-  user: root
   mem_limit: 64m
+  group_add:
+    - "${DOCKER_GID}"
   ports:
     - 127.0.0.1:9415:9415
   volumes:
@@ -127,11 +182,11 @@ any other standard Prometheus-compatible stack.
 
 Replace the cAdvisor sidecar with this exporter and change the Alloy
 `job="cadvisor"` scrape target to `job="docker-health"` — or relabel
-`job` to `docker-health`. The usage families are name-, type- and
+`job` to `docker-health`. The seven usage families are name-, type- and
 unit-compatible, so dashboards and copy queries
 (`rate(container_cpu_usage_seconds_total[$__rate_interval])`,
 `container_memory_working_set_bytes`,
-`time() - container_started_time_seconds > 0`) keep working without edits.
+`increase(container_oom_events_total[15m])`) keep working without edits.
 The one deliberate difference is cardinality: this exporter emits far fewer
 series (no per-CPU, sched, hugetlb, or throttle breakdowns), which is the
 point — on a 1 GiB VPS that is the difference between ~63 MiB (cAdvisor) and
@@ -140,14 +195,11 @@ point — on a 1 GiB VPS that is the difference between ~63 MiB (cAdvisor) and
 ## Development
 
 ```sh
-gofmt -w .
 go vet ./...
-go test -race ./...
+go test ./...
 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tmp/dhe ./cmd/docker-health-exporter
 docker build -t docker-health-exporter .
 ```
-
-Golden regression output: see `internal/exporter/testdata/README.md`.
 
 ## Layout
 
