@@ -59,7 +59,7 @@ exited after an OOM.
 
 | Topic | This exporter |
 |---|---|
-| `container_oom_events_total` | Counts Engine **EventOOM** (`Action: oom` on `GET /events`), not cAdvisor's `/dev/kmsg` parse (no privileged device). In-memory counter resets on exporter restart (`increase()` handles it). Live stream from process start; on reconnect `since=` backfill is best-effort (daemon keeps ~256 events total). Typically container memory-limit OOMs the daemon attributes; host-wide kills stay on `node_vmstat_oom_kill`. |
+| `container_oom_events_total` | Counts Engine **EventOOM** (`Action: oom` on `GET /events`), not cAdvisor's `/dev/kmsg` parse (no privileged device). In-memory counter resets on exporter restart; Prometheus `increase()` treats resets, but if the counter returns to the same value before the next scrape (e.g. 1 → restart → 1), no increase is recorded in that interval. Streams live while the exporter runs. On reconnect, `since=` backfill uses the last processed event timestamp (nanoseconds, exclusive) and is best-effort (daemon keeps ~256 events total). OOMs during a stream outage before any event has been recorded are not backfilled. Typically container memory-limit OOMs the daemon attributes; host-wide kills stay on `node_vmstat_oom_kill`. |
 | Network / disk | Summed across all interfaces / devices — no `interface` or `device` labels |
 | Per-CPU / sched / hugetlb | Not emitted — dashboards do not query them (`container_cpu_usage_seconds_total` is emitted) |
 | `machine_*`, `cadvisor_version_info` | Not emitted |

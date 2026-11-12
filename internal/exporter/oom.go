@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -117,10 +119,13 @@ func RunOOMWatcher(ctx context.Context, client EventsClient, store *OOMStore) {
 		if ctx.Err() != nil {
 			return
 		}
-		if err != nil {
-			log.Printf("docker events stream: %v; reconnecting in %s", err, backoff)
-		} else {
+		switch {
+		case err == nil || err == io.EOF:
+			// Stream ended cleanly (EOF on normal close). Reset delay so a later
+			// blip does not inherit a 30s wait from earlier failures.
 			backoff = time.Second
+		default:
+			log.Printf("docker events stream: %v; reconnecting in %s", err, backoff)
 		}
 		select {
 		case <-ctx.Done():
@@ -201,12 +206,26 @@ func eventsFiltersJSON() string {
 	return string(raw)
 }
 
+// dockerEventSinceParam encodes since for GET /events. Docker Engine expects a
+// Unix timestamp with optional fractional seconds, not RFC3339.
+func dockerEventSinceParam(since time.Time) string {
+	if since.IsZero() {
+		return ""
+	}
+	sec := since.Unix()
+	nsec := since.Nanosecond()
+	if nsec == 0 {
+		return strconv.FormatInt(sec, 10)
+	}
+	return fmt.Sprintf("%d.%09d", sec, nsec)
+}
+
 // eventsPath returns GET /events?filters=...&since=... query path.
 func eventsPath(since time.Time) string {
 	q := url.Values{}
 	q.Set("filters", eventsFiltersJSON())
-	if !since.IsZero() {
-		q.Set("since", since.Format(time.RFC3339Nano))
+	if s := dockerEventSinceParam(since); s != "" {
+		q.Set("since", s)
 	}
 	return "/events?" + q.Encode()
 }

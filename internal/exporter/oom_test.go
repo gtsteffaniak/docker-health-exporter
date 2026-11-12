@@ -155,6 +155,22 @@ func TestEventsPathFiltersOOMOnly(t *testing.T) {
 	}
 }
 
+func TestEventsPathSinceNumeric(t *testing.T) {
+	since := time.Unix(1700000000, 123456789)
+	path := eventsPath(since)
+	if strings.Contains(path, "RFC") || strings.Contains(path, "T17") {
+		t.Fatalf("since must not be RFC3339: %s", path)
+	}
+	want := "since=1700000000.123456789"
+	if !strings.Contains(path, want) {
+		t.Fatalf("since param = %q, want substring %q", path, want)
+	}
+	pathNoFrac := eventsPath(time.Unix(42, 0))
+	if !strings.Contains(pathNoFrac, "since=42") {
+		t.Fatalf("integer since: %s", pathNoFrac)
+	}
+}
+
 func dockerOOMEvent(id, name string) map[string]any {
 	return dockerOOMEventAt(id, name, time.Now().UnixNano())
 }
