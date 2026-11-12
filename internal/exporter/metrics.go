@@ -183,15 +183,3 @@ func WorkingSetBytes(s *Stats) uint64 {
 	}
 	return 0
 }
-
-// OOMEvents is best-effort from Docker stats: Docker exposes no per-
-// container OOM counter in /stats (the cgroup pid is needed to read
-// memory.events, which the exporter does not read). Returning 0 keeps the
-// series present so the alert expression stays valid rather than erroring
-// on a missing metric. A future rev can source real OOMs from
-// /sys/fs/cgroup/system.slice/docker-<id>.scope/memory.events when the
-// exporter has the id or the cgroup path.
-func OOMEvents(s *Stats) uint64 {
-	_ = s
-	return 0
-}

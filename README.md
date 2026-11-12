@@ -41,7 +41,7 @@ cAdvisor ships by default are **not** emitted — nothing queries them.
 | `container_network_transmit_bytes_total` | counter | Total bytes transmitted |
 | `container_fs_reads_bytes_total` | counter | Total disk bytes read, summed over blkio entries |
 | `container_fs_writes_bytes_total` | counter | Total disk bytes written |
-| `container_oom_events_total` | counter | Always **0** from Docker `/stats` (see below) |
+| `container_oom_events_total` | counter | Cumulative Docker container `oom` events (`GET /events`, see below) |
 | `container_threads` | gauge | Current thread count |
 | `container_threads_max` | gauge | Thread limit (`pids_stats.limit`) |
 | `container_start_time_seconds` | gauge | cAdvisor-named alias of started time |
@@ -55,7 +55,7 @@ healthcheck. Stopped containers carry no usage for that scrape.
 
 | Topic | This exporter |
 |---|---|
-| `container_oom_events_total` | Always `0`: Docker `/stats` has no OOM counter (would need cgroup `memory.events`) |
+| `container_oom_events_total` | Counts Engine **EventOOM** (`Action: oom` on `GET /events`), not cAdvisor's `/dev/kmsg` parse (no privileged device). In-memory counter resets on exporter restart (`increase()` handles it). Live stream from process start; on reconnect `since=` backfill is best-effort (daemon keeps ~256 events total). Typically container memory-limit OOMs the daemon attributes; host-wide kills stay on `node_vmstat_oom_kill`. |
 | Network / disk | Summed across all interfaces / devices — no `interface` or `device` labels |
 | Per-CPU / sched / hugetlb | Not emitted — dashboards do not query them (`container_cpu_usage_seconds_total` is emitted) |
 | `machine_*`, `cadvisor_version_info` | Not emitted |

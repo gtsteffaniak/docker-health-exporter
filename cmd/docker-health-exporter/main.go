@@ -3,7 +3,9 @@
 //
 // A single scrape of /metrics lists containers via the Docker API over the
 // unix socket, then per container inspects state/health and reads one-shot
-// stats. No daemon, no filesystem, no third-party dependencies: stdlib only,
+// stats. A background goroutine streams GET /events (container oom) over the
+// same socket for container_oom_events_total. No daemon, no cgroup mounts, no
+// third-party dependencies: stdlib only,
 // so the static binary runs in a scratch-class image with the socket as its
 // only host touchpoint.
 //
@@ -18,7 +20,7 @@
 //	container_cpu_usage_seconds_total, container_memory_working_set_bytes,
 //	container_network_receive_bytes_total,
 //	container_network_transmit_bytes_total, container_fs_reads_bytes_total,
-//	container_fs_writes_bytes_total, container_oom_events_total,
+//	container_fs_writes_bytes_total, container_oom_events_total (Docker oom events),
 //	container_start_time_seconds, container_last_seen (gauges; uptime uses started_time)
 //
 // Usage:
@@ -48,7 +50,11 @@ func main() {
 	)
 	flag.Parse()
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	srv := exporter.NewServer(*socket, *timeout)
+	srv.RunBackground(ctx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
@@ -64,8 +70,6 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)

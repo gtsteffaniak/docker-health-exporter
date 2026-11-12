@@ -43,7 +43,7 @@ container_fs_reads_bytes_total{compose_project="stack",compose_service="healthy_
 # HELP container_fs_writes_bytes_total Total disk bytes written.
 # TYPE container_fs_writes_bytes_total counter
 container_fs_writes_bytes_total{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 8192
-# HELP container_oom_events_total OOM kills (always 0 from Docker /stats — see README).
+# HELP container_oom_events_total Cumulative Docker container oom events (Engine /events Action oom).
 # TYPE container_oom_events_total counter
 container_oom_events_total{compose_project="stack",compose_service="healthy_svc",container="healthy_svc",container_id="id-healthy",image="img:1",name="healthy_svc"} 0
 # HELP container_threads Current thread count.
