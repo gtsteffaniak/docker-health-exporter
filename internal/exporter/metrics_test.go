@@ -1,30 +1,105 @@
 package exporter
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestHealthState(t *testing.T) {
-	cases := map[string]Container{
-		"healthy":   {State: "running", Status: "Up 2 hours (healthy)"},
-		"unhealthy": {State: "running", Status: "Up 5 minutes (unhealthy)"},
-		"starting":  {State: "running", Status: "Up 3 seconds (health: starting)"},
-		"running":   {State: "running", Status: "Up 2 hours"},
-		"stopped":   {State: "exited", Status: "Exited (0) 1 hour ago"},
+	cases := []struct {
+		name string
+		c    Container
+		in   *Inspect
+		want string
+	}{
+		{"healthy list", Container{State: "running", Status: "Up 2 hours (healthy)"}, nil, "healthy"},
+		{"unhealthy list", Container{State: "running", Status: "Up 5 minutes (unhealthy)"}, nil, "unhealthy"},
+		{"starting list", Container{State: "running", Status: "Up 3 seconds (health: starting)"}, nil, "starting"},
+		{"running list", Container{State: "running", Status: "Up 2 hours"}, nil, "running"},
+		{"stopped list", Container{State: "exited", Status: "Exited (0) 1 hour ago"}, nil, "stopped"},
+		{"unknown list", Container{State: "paused", Status: "Paused"}, nil, "unknown"},
 	}
-	for want, c := range cases {
-		if got := HealthState(c, nil); got != want {
-			t.Errorf("HealthState(%q) = %q, want %q", c.Status, got, want)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := HealthState(tc.c, tc.in); got != tc.want {
+				t.Errorf("HealthState() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
-func TestHealthStateInspect(t *testing.T) {
+func TestHealthStateInspectStateHealth(t *testing.T) {
+	raw := readTestdata(t, "inspect_health.json")
 	var in Inspect
-	in.Health = &struct {
-		Status string `json:"Status"`
-	}{Status: "healthy"}
+	if err := json.Unmarshal(raw, &in); err != nil {
+		t.Fatal(err)
+	}
 	c := Container{State: "running", Status: "Up (unhealthy)"}
 	if got := HealthState(c, &in); got != "healthy" {
-		t.Errorf("inspect health wins over Status: got %q, want healthy", got)
+		t.Errorf("State.Health wins: got %q, want healthy", got)
+	}
+	if in.State.Health == nil {
+		t.Fatal("expected State.Health unmarshalled")
+	}
+}
+
+func TestInspectUnmarshalWrongTopLevelHealth(t *testing.T) {
+	// Top-level Health is not where Docker puts it; must not populate State.Health.
+	var in Inspect
+	if err := json.Unmarshal([]byte(`{"Health":{"Status":"healthy"},"State":{}}`), &in); err != nil {
+		t.Fatal(err)
+	}
+	if in.State.Health != nil {
+		t.Error("top-level Health must not bind to removed field")
+	}
+}
+
+func TestStatsUnmarshalRealDockerJSON(t *testing.T) {
+	raw := readTestdata(t, "docker_stats_sample.json")
+	var s Stats
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.CPUStats.CPUUsage.TotalUsage != 3_500_000_000 {
+		t.Errorf("total_usage = %d, want 3.5e9", s.CPUStats.CPUUsage.TotalUsage)
+	}
+	if got := CPUSecs(&s); got != 3.5 {
+		t.Errorf("CPUSecs = %v, want 3.5 (not zero)", got)
+	}
+	if s.CPUStats.CPUUsage.UsageInKernelmode != 500_000_000 {
+		t.Errorf("kernel mode = %d", s.CPUStats.CPUUsage.UsageInKernelmode)
+	}
+}
+
+func TestWorkingSetBytesInactiveFile(t *testing.T) {
+	raw := readTestdata(t, "docker_stats_sample.json")
+	var s Stats
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	want := s.MemoryStats.Usage - s.MemoryStats.Stats.InactiveFile
+	if got := WorkingSetBytes(&s); got != want {
+		t.Errorf("WorkingSetBytes = %d, want %d (usage - inactive_file)", got, want)
+	}
+}
+
+func TestWorkingSetBytesCgroupV1Fallback(t *testing.T) {
+	s := &Stats{}
+	s.MemoryStats.Usage = 1000
+	s.MemoryStats.TotalInactiveFile = 200
+	if got := WorkingSetBytes(s); got != 800 {
+		t.Errorf("got %d, want 800", got)
+	}
+}
+
+func TestWorkingSetBytesFloorAtZero(t *testing.T) {
+	s := &Stats{}
+	s.MemoryStats.Usage = 100
+	s.MemoryStats.Stats.InactiveFile = 500
+	if got := WorkingSetBytes(s); got != 0 {
+		t.Errorf("got %d, want 0", got)
 	}
 }
 
@@ -64,6 +139,18 @@ func TestDiskIO(t *testing.T) {
 	}
 }
 
+func TestDiskIOEmptyBlkio(t *testing.T) {
+	raw := readTestdata(t, "docker_stats_cgroupv2_empty_blkio.json")
+	var s Stats
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	r, w := DiskIO(&s)
+	if r != 0 || w != 0 {
+		t.Errorf("empty blkio: got (%d,%d), want (0,0)", r, w)
+	}
+}
+
 func TestNetworkIO(t *testing.T) {
 	s := &Stats{}
 	s.Networks = map[string]struct {
@@ -75,14 +162,57 @@ func TestNetworkIO(t *testing.T) {
 	}
 }
 
-func TestCPUSecsAndWorkingSet(t *testing.T) {
-	s := &Stats{}
-	s.CPUUsage.TotalUsage = 2_000_000_000 // 2s
-	s.MemoryStats.Usage = 12345
-	if got := CPUSecs(s); got != 2 {
-		t.Errorf("CPUSecs = %v, want 2", got)
+func TestCPUSecsNil(t *testing.T) {
+	if got := CPUSecs(nil); got != 0 {
+		t.Errorf("CPUSecs(nil) = %v", got)
 	}
-	if got := WorkingSetBytes(s); got != 12345 {
-		t.Errorf("WorkingSetBytes = %d, want 12345", got)
+}
+
+func TestOOMEventsAlwaysZero(t *testing.T) {
+	raw := readTestdata(t, "docker_stats_sample.json")
+	var s Stats
+	_ = json.Unmarshal(raw, &s)
+	if got := OOMEvents(&s); got != 0 {
+		t.Errorf("OOMEvents = %d, want 0", got)
 	}
+}
+
+func TestIsRunning(t *testing.T) {
+	if !IsRunning(Container{State: "running"}) {
+		t.Error("expected running")
+	}
+	if IsRunning(Container{State: "exited"}) {
+		t.Error("exited is not running")
+	}
+}
+
+func TestRegressionHealthyContainerCPUAndUsage(t *testing.T) {
+	// Guards bugs #1 and #3: usage must not depend on health state "healthy",
+	// and CPU must unmarshal from nested cpu_stats.
+	raw := readTestdata(t, "docker_stats_sample.json")
+	var s Stats
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	if CPUSecs(&s) == 0 {
+		t.Fatal("CPU must be non-zero after unmarshalling real-shaped JSON")
+	}
+	c := Container{State: "running", Status: "Up (healthy)"}
+	var in Inspect
+	_ = json.Unmarshal(readTestdata(t, "inspect_health.json"), &in)
+	if HealthState(c, &in) != "healthy" {
+		t.Fatal("fixture should be healthy")
+	}
+	if !IsRunning(c) {
+		t.Fatal("healthy container must still be Docker-running")
+	}
+}
+
+func readTestdata(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

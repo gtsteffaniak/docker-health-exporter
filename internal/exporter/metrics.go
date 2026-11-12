@@ -39,16 +39,16 @@ func ComposeLabels(c Container, name string) (project, service string) {
 //
 //	healthy | unhealthy | starting | running | stopped | unknown
 //
-// The Inspect Health block is preferred (exact, no string parsing). When
-// there is no healthcheck the run state is used, so one alert rule
-// (ContainerUnhealthy) covers healthcheck and plain containers alike.
+// Inspect State.Health is preferred (exact, no string parsing). When there is
+// no healthcheck the run state is used, so one alert rule (ContainerUnhealthy)
+// covers healthcheck and plain containers alike.
 //
-// Legacy list Status parsing ("Up (healthy)", "(unhealthy)", ...) is kept
-// as a fallback for Docker builds whose /json embeds health in Status but
-// has no Health.Status in the inspect document.
+// Legacy list Status parsing ("Up (healthy)", "(unhealthy)", ...) is kept as a
+// fallback for Docker builds whose /json embeds health in Status but omit
+// State.Health in inspect.
 func HealthState(c Container, in *Inspect) string {
-	if in != nil && in.Health != nil {
-		switch strings.ToLower(in.Health.Status) {
+	if in != nil && in.State.Health != nil {
+		switch strings.ToLower(in.State.Health.Status) {
 		case "healthy":
 			return "healthy"
 		case "unhealthy":
@@ -78,6 +78,12 @@ func healthStateFromList(c Container) string {
 	default:
 		return "unknown"
 	}
+}
+
+// IsRunning reports whether Docker's run state is "running" (distinct from
+// healthcheck status healthy/unhealthy/starting).
+func IsRunning(c Container) bool {
+	return strings.EqualFold(c.State, "running")
 }
 
 // StartedUnix parses Docker's RFC 3339 StartedAt. A never-started container
@@ -125,19 +131,33 @@ func CPUSecs(s *Stats) float64 {
 	if s == nil {
 		return 0
 	}
-	return float64(s.CPUUsage.TotalUsage) / 1e9
+	return float64(s.CPUStats.CPUUsage.TotalUsage) / 1e9
 }
 
-// WorkingSetBytes is the cAdvisor container_memory_working_set_bytes
-// analogue. The Docker `usage` field is already working-set (page cache
-// included) when the kernel is on cgroup v2, which is what all supported
-// hosts run; usage is capped at the limit/summary total when Docker
-// reports it.
+// inactiveFileBytes returns page-cache inactive file bytes from a stats doc
+// (cgroup v2: memory_stats.stats.inactive_file; v1: total_inactive_file).
+func inactiveFileBytes(s *Stats) uint64 {
+	if s == nil {
+		return 0
+	}
+	if v := s.MemoryStats.Stats.InactiveFile; v != 0 {
+		return v
+	}
+	return s.MemoryStats.TotalInactiveFile
+}
+
+// WorkingSetBytes matches cAdvisor container_memory_working_set_bytes:
+// usage minus inactive file cache, floored at zero.
 func WorkingSetBytes(s *Stats) uint64 {
 	if s == nil {
 		return 0
 	}
-	return s.MemoryStats.Usage
+	usage := s.MemoryStats.Usage
+	inactive := inactiveFileBytes(s)
+	if usage > inactive {
+		return usage - inactive
+	}
+	return 0
 }
 
 // OOMEvents is best-effort from Docker stats: Docker exposes no per-
