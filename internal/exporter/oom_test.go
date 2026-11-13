@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -104,6 +105,36 @@ func TestOOMStoreBoundedAcrossRecreates(t *testing.T) {
 	if got := s.Count(prev); got != 1 {
 		t.Fatalf("live %s count = %d, want 1", prev, got)
 	}
+}
+
+func TestOOMStoreConcurrentPruneAndRecord(t *testing.T) {
+	s := NewOOMStore()
+	const workers = 8
+	const rounds = 100
+	var wg sync.WaitGroup
+	wg.Add(workers * 2)
+	for w := 0; w < workers; w++ {
+		w := w
+		go func() {
+			defer wg.Done()
+			for i := 0; i < rounds; i++ {
+				id := fmt.Sprintf("w%d-i%d", w, i)
+				s.RecordOOM(id, int64(w*rounds+i+1))
+				s.RecordOOM(id, int64(w*rounds+i+1))
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for i := 0; i < rounds; i++ {
+				live := []string{
+					fmt.Sprintf("w%d-i%d", w, i),
+					fmt.Sprintf("w%d-i%d", (w+1)%workers, i),
+				}
+				s.PruneAfterList(live)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestServeMetricsListErrorDoesNotPruneOOM(t *testing.T) {

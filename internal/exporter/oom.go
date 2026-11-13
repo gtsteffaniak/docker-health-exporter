@@ -97,17 +97,15 @@ func (s *OOMStore) PruneAfterList(liveIDs []string) {
 	if s == nil {
 		return
 	}
-	for k := range s.liveScratch {
-		delete(s.liveScratch, k)
-	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clear(s.liveScratch)
 	for _, id := range liveIDs {
 		if id != "" {
 			s.liveScratch[id] = struct{}{}
 		}
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	for id := range s.counts {
 		if _, live := s.liveScratch[id]; live {
 			delete(s.absentOnce, id)
@@ -120,11 +118,6 @@ func (s *OOMStore) PruneAfterList(liveIDs []string) {
 			continue
 		}
 		s.absentOnce[id] = struct{}{}
-	}
-	for id := range s.lastNano {
-		if _, ok := s.counts[id]; !ok {
-			delete(s.lastNano, id)
-		}
 	}
 }
 
