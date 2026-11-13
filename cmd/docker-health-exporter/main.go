@@ -2,8 +2,9 @@
 // cAdvisor-compatible resource usage as Prometheus metrics.
 //
 // A single scrape of /metrics lists containers via the Docker API over the
-// unix socket, then per container inspects state/health and reads one-shot
-// stats. A background goroutine streams GET /events (container oom) over the
+// unix socket, then inspects state/health and reads one-shot stats for each
+// container with a bounded number of concurrent API calls. A background
+// goroutine streams GET /events (container oom) over the
 // same socket for container_oom_events_total. No daemon, no cgroup mounts, no
 // third-party dependencies: stdlib only,
 // so the static binary runs in a scratch-class image with the socket as its
@@ -26,6 +27,7 @@
 // Usage:
 //
 //	docker-health-exporter [-listen :9415] [-docker-socket /var/run/docker.sock]
+//	                      [-timeout 5s] [-scrape-concurrency 8] [-scrape-timeout 10s]
 package main
 
 import (
@@ -36,6 +38,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -44,9 +47,11 @@ import (
 
 func main() {
 	var (
-		addr    = flag.String("listen", ":9415", "address to serve metrics on")
-		socket  = flag.String("docker-socket", "/var/run/docker.sock", "Docker API socket")
-		timeout = flag.Duration("timeout", 5*time.Second, "Docker API request timeout")
+		addr          = flag.String("listen", ":9415", "address to serve metrics on")
+		socket        = flag.String("docker-socket", "/var/run/docker.sock", "Docker API socket")
+		timeout       = flag.Duration("timeout", 5*time.Second, "Docker API request timeout")
+		concurrency   = flag.Int("scrape-concurrency", envInt("SCRAPE_CONCURRENCY", exporter.DefaultScrapeConcurrency), "max concurrent Docker inspect and stats requests per scrape")
+		scrapeTimeout = flag.Duration("scrape-timeout", envDuration("SCRAPE_TIMEOUT", exporter.DefaultScrapeTimeout), "maximum time a /metrics scrape may spend calling the Docker API")
 	)
 	flag.Parse()
 
@@ -54,6 +59,7 @@ func main() {
 	defer stop()
 
 	srv := exporter.NewServer(*socket, *timeout)
+	srv.SetScrapeLimits(*concurrency, *scrapeTimeout)
 	srv.RunBackground(ctx)
 
 	mux := http.NewServeMux()
@@ -79,4 +85,30 @@ func main() {
 	_ = os.Stdout
 	fmt.Println("docker-health-exporter listening on", *addr)
 	log.Fatal(httpSrv.ListenAndServe())
+}
+
+func envInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		log.Printf("invalid %s=%q, using %d", key, v, fallback)
+		return fallback
+	}
+	return n
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		log.Printf("invalid %s=%q, using %s", key, v, fallback)
+		return fallback
+	}
+	return d
 }

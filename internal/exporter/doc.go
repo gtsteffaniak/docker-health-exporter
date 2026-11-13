@@ -6,8 +6,9 @@
 // with the Docker socket as its single host mount.
 //
 // Scraping /metrics is stateless aside from container_oom_events_total: one
-// HTTP request fans out to list, inspect per container, and stats per running
-// container. A background goroutine streams GET /events (filtered to container
+// HTTP request lists containers, then inspects each one and reads stats for
+// running containers with a bounded number of concurrent Docker API calls
+// (default 8). A background goroutine streams GET /events (filtered to container
 // oom) over the same socket into an in-memory counter; counts reset on
 // exporter restart. OOM state is pruned after each successful container list
 // so removed container IDs do not accumulate for the process lifetime. With the

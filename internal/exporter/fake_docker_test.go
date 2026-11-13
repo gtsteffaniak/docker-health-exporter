@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -17,6 +18,41 @@ type fakeDocker struct {
 	stats   map[string]json.RawMessage
 	// events, when non-nil, enables GET /events and streams lines from the channel.
 	events chan []byte
+
+	// Optional test controls for concurrent scrape behavior.
+	latency       time.Duration
+	inspectStatus map[string]int // id -> non-200 status
+	statsStatus   map[string]int
+	inflight      atomic.Int64
+	maxInflight   atomic.Int64
+	inspectCalls  atomic.Int64
+	statsCalls    atomic.Int64
+}
+
+func (f *fakeDocker) enter() {
+	n := f.inflight.Add(1)
+	for {
+		cur := f.maxInflight.Load()
+		if n <= cur || f.maxInflight.CompareAndSwap(cur, n) {
+			return
+		}
+	}
+}
+
+func (f *fakeDocker) leave() {
+	f.inflight.Add(-1)
+}
+
+func (f *fakeDocker) maybeDelay(r *http.Request) {
+	if f.latency <= 0 {
+		return
+	}
+	timer := time.NewTimer(f.latency)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-r.Context().Done():
+	}
 }
 
 func (f *fakeDocker) handler() http.Handler {
@@ -31,6 +67,17 @@ func (f *fakeDocker) handler() http.Handler {
 			_ = json.NewEncoder(w).Encode(f.list)
 		case strings.HasSuffix(r.URL.Path, "/json") && r.Method == http.MethodGet:
 			id := strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/json"), "/containers/")
+			f.inspectCalls.Add(1)
+			f.enter()
+			defer f.leave()
+			f.maybeDelay(r)
+			if r.Context().Err() != nil {
+				return
+			}
+			if code, ok := f.inspectStatus[id]; ok && code != http.StatusOK {
+				http.Error(w, "inspect failed", code)
+				return
+			}
 			raw, ok := f.inspect[id]
 			if !ok {
 				http.NotFound(w, r)
@@ -72,6 +119,17 @@ func (f *fakeDocker) handler() http.Handler {
 			}
 			path := strings.TrimPrefix(r.URL.Path, "/containers/")
 			id, _, _ := strings.Cut(path, "/stats")
+			f.statsCalls.Add(1)
+			f.enter()
+			defer f.leave()
+			f.maybeDelay(r)
+			if r.Context().Err() != nil {
+				return
+			}
+			if code, ok := f.statsStatus[id]; ok && code != http.StatusOK {
+				http.Error(w, "stats failed", code)
+				return
+			}
 			raw, ok := f.stats[id]
 			if !ok {
 				http.NotFound(w, r)
