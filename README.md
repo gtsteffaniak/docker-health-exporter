@@ -68,6 +68,17 @@ exited after an OOM.
 
 ## Usage
 
+Flags (defaults can also be set with `SCRAPE_CONCURRENCY` and
+`SCRAPE_TIMEOUT`):
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-listen` | `:9415` | Address to serve `/metrics` and `/healthz` |
+| `-docker-socket` | `/var/run/docker.sock` | Docker API socket |
+| `-timeout` | `5s` | Per-request Docker API timeout |
+| `-scrape-concurrency` | `8` | Max concurrent inspect and stats calls per scrape |
+| `-scrape-timeout` | `10s` | Deadline for Docker API work in one `/metrics` scrape |
+
 ```sh
 # Terminal/run directly
 docker-health-exporter -listen :9415
@@ -162,5 +173,7 @@ internal/prom/                minimal Prometheus text encoder + tests
 ```
 
 All metrics paths are shared, race-free and allocation-light by design: one
-list call, one inspect per container, one one-shot stats call per running
-container per scrape — no background goroutine keeps state between scrapes.
+list call, then inspect per container and one one-shot stats call per running
+container, fetched concurrently with a bound of 8 (configurable). Metric text
+is still emitted in Docker list order. A background goroutine streams Docker
+OOM events; nothing else is kept between scrapes.

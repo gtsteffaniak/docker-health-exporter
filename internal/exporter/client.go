@@ -103,6 +103,10 @@ func New(socket string, timeout time.Duration) *Client {
 			var d net.Dialer
 			return d.DialContext(ctx, "unix", socket)
 		},
+		// Keep enough idle unix-socket connections for a concurrent scrape
+		// (default 8 in-flight inspect/stats calls).
+		MaxIdleConns:        32,
+		MaxIdleConnsPerHost: 16,
 	}
 	return &Client{
 		socket: socket,
