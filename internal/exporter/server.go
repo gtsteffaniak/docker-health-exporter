@@ -93,6 +93,14 @@ func (s *Server) ServeMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.oomStore != nil {
+		liveIDs := make([]string, len(containers))
+		for i := range containers {
+			liveIDs[i] = containers[i].ID
+		}
+		s.oomStore.PruneAfterList(liveIDs)
+	}
+
 	enc := prom.NewEncoder(w)
 	enc.Gauge("docker_health_exporter_up", "Whether the Docker API answered.", nil, 1)
 

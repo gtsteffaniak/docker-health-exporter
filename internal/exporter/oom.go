@@ -31,17 +31,26 @@ type DockerEvent struct {
 // OOMStore holds cumulative per-container OOM event counts from Docker /events.
 // Counts reset when the exporter process restarts (same as cAdvisor's in-memory
 // path); Prometheus increase() handles counter resets.
+//
+// Dedupe uses a per-container TimeNano high-water mark (not a set of all
+// timestamps). After each successful container list, entries for IDs absent
+// from two consecutive lists are dropped so recreate churn does not grow memory
+// without bound.
 type OOMStore struct {
-	mu     sync.RWMutex
-	counts map[string]uint64
-	seen   map[string]map[int64]struct{} // container ID -> event TimeNano
+	mu          sync.RWMutex
+	counts      map[string]uint64
+	lastNano    map[string]int64 // container ID -> latest OOM event TimeNano
+	absentOnce  map[string]struct{}
+	liveScratch map[string]struct{}
 }
 
 // NewOOMStore returns an empty OOM counter store.
 func NewOOMStore() *OOMStore {
 	return &OOMStore{
-		counts: make(map[string]uint64),
-		seen:   make(map[string]map[int64]struct{}),
+		counts:      make(map[string]uint64),
+		lastNano:    make(map[string]int64),
+		absentOnce:  make(map[string]struct{}),
+		liveScratch: make(map[string]struct{}),
 	}
 }
 
@@ -55,9 +64,14 @@ func (s *OOMStore) Count(containerID string) uint64 {
 	return s.counts[containerID]
 }
 
-// RecordOOM increments the oom counter unless this (containerID, timeNano) was
-// already recorded (reconnect replay dedupe). timeNano may be 0 when Docker
-// omits it; those events are counted without dedupe.
+// RecordOOM increments the oom counter unless this event was already recorded.
+// When timeNano > 0, events with timeNano less than or equal to the stored
+// high-water mark for that container are ignored (reconnect replay dedupe).
+// When timeNano is 0 (Docker omitted it), events are counted without dedupe.
+//
+// If two distinct OOM events for the same container shared an identical TimeNano,
+// only the first would be counted; Docker Engine assigns nanosecond timestamps
+// per event and collisions are not expected in practice.
 func (s *OOMStore) RecordOOM(containerID string, timeNano int64) {
 	if s == nil || containerID == "" {
 		return
@@ -65,17 +79,46 @@ func (s *OOMStore) RecordOOM(containerID string, timeNano int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if timeNano > 0 {
-		m := s.seen[containerID]
-		if m == nil {
-			m = make(map[int64]struct{})
-			s.seen[containerID] = m
-		}
-		if _, dup := m[timeNano]; dup {
+		if prev, ok := s.lastNano[containerID]; ok && timeNano <= prev {
 			return
 		}
-		m[timeNano] = struct{}{}
+		s.lastNano[containerID] = timeNano
 	}
 	s.counts[containerID]++
+}
+
+// PruneAfterList removes store entries for container IDs that were missing from
+// a successful Docker list on the previous scrape and are still missing now.
+// IDs present in liveIDs clear any pending removal. IDs absent from liveIDs are
+// removed only after two consecutive successful lists omit them, so an OOM
+// recorded just after a list snapshot (before the container appears on list) is
+// not dropped on the next scrape when Docker lists that container.
+func (s *OOMStore) PruneAfterList(liveIDs []string) {
+	if s == nil {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clear(s.liveScratch)
+	for _, id := range liveIDs {
+		if id != "" {
+			s.liveScratch[id] = struct{}{}
+		}
+	}
+	for id := range s.counts {
+		if _, live := s.liveScratch[id]; live {
+			delete(s.absentOnce, id)
+			continue
+		}
+		if _, pending := s.absentOnce[id]; pending {
+			delete(s.counts, id)
+			delete(s.lastNano, id)
+			delete(s.absentOnce, id)
+			continue
+		}
+		s.absentOnce[id] = struct{}{}
+	}
 }
 
 func eventTimeNano(ev DockerEvent) int64 {
@@ -113,7 +156,7 @@ func RunOOMWatcher(ctx context.Context, client EventsClient, store *OOMStore) {
 		if t := lastEventNano.Load(); t > 0 {
 			// Inclusive since: Docker may return several OOMs at the same
 			// timestamp. Reconnecting at t lets a later container in that
-			// second arrive; OOMStore dedupes exact (id, TimeNano) replays.
+			// second arrive; OOMStore dedupes replay at or below last TimeNano.
 			since = time.Unix(0, t)
 		}
 		err := watchOOMStream(ctx, client, store, since, &lastEventNano)

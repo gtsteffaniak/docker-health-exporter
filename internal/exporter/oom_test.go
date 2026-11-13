@@ -3,11 +3,13 @@ package exporter
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,6 +28,129 @@ func TestOOMStoreRecordOOM(t *testing.T) {
 	}
 	if got := s.Count("missing"); got != 0 {
 		t.Fatalf("missing = %d, want 0", got)
+	}
+}
+
+func TestOOMStoreHighWaterMarkReplay(t *testing.T) {
+	s := NewOOMStore()
+	const tn = int64(1700000000123456789)
+	s.RecordOOM("id", tn)
+	s.RecordOOM("id", tn)
+	if got := s.Count("id"); got != 1 {
+		t.Fatalf("same TimeNano twice: count = %d, want 1", got)
+	}
+	s.RecordOOM("id", tn-1)
+	if got := s.Count("id"); got != 1 {
+		t.Fatalf("older TimeNano replay: count = %d, want 1", got)
+	}
+	s.RecordOOM("id", tn+1)
+	if got := s.Count("id"); got != 2 {
+		t.Fatalf("newer TimeNano: count = %d, want 2", got)
+	}
+}
+
+func TestOOMStorePruneRemovesAfterTwoAbsentLists(t *testing.T) {
+	s := NewOOMStore()
+	s.RecordOOM("gone", 1)
+	s.RecordOOM("live", 2)
+	s.PruneAfterList([]string{"live"})
+	if got := s.Count("gone"); got != 1 {
+		t.Fatalf("first absent: gone count = %d, want 1", got)
+	}
+	s.PruneAfterList([]string{"live"})
+	if got := s.Count("gone"); got != 0 {
+		t.Fatalf("second absent: gone count = %d, want 0", got)
+	}
+	if got := s.Count("live"); got != 1 {
+		t.Fatalf("live count = %d, want 1", got)
+	}
+}
+
+func TestOOMStorePruneClearsPendingWhenIDReturns(t *testing.T) {
+	s := NewOOMStore()
+	s.RecordOOM("id", 1)
+	s.PruneAfterList(nil)
+	s.PruneAfterList([]string{"id"})
+	if got := s.Count("id"); got != 1 {
+		t.Fatalf("count after reappear = %d, want 1", got)
+	}
+	s.PruneAfterList([]string{"id"})
+	if got := s.Count("id"); got != 1 {
+		t.Fatalf("stable live count = %d, want 1", got)
+	}
+}
+
+func TestOOMStoreBoundedAcrossRecreates(t *testing.T) {
+	s := NewOOMStore()
+	const cycles = 50
+	var prev string
+	for i := 0; i < cycles; i++ {
+		live := "id-" + strconv.Itoa(i)
+		s.RecordOOM(live, int64(i+1))
+		s.PruneAfterList([]string{live})
+		s.PruneAfterList([]string{live})
+		if prev != "" {
+			if got := s.Count(prev); got != 0 {
+				t.Fatalf("stale %s count = %d after recreate", prev, got)
+			}
+		}
+		prev = live
+	}
+	s.mu.RLock()
+	n := len(s.counts)
+	s.mu.RUnlock()
+	if n != 1 {
+		t.Fatalf("store has %d entries after %d recreates, want 1", n, cycles)
+	}
+	if got := s.Count(prev); got != 1 {
+		t.Fatalf("live %s count = %d, want 1", prev, got)
+	}
+}
+
+func TestOOMStoreConcurrentPruneAndRecord(t *testing.T) {
+	s := NewOOMStore()
+	const workers = 8
+	const rounds = 100
+	var wg sync.WaitGroup
+	wg.Add(workers * 2)
+	for w := 0; w < workers; w++ {
+		w := w
+		go func() {
+			defer wg.Done()
+			for i := 0; i < rounds; i++ {
+				id := fmt.Sprintf("w%d-i%d", w, i)
+				s.RecordOOM(id, int64(w*rounds+i+1))
+				s.RecordOOM(id, int64(w*rounds+i+1))
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for i := 0; i < rounds; i++ {
+				live := []string{
+					fmt.Sprintf("w%d-i%d", w, i),
+					fmt.Sprintf("w%d-i%d", (w+1)%workers, i),
+				}
+				s.PruneAfterList(live)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestServeMetricsListErrorDoesNotPruneOOM(t *testing.T) {
+	store := NewOOMStore()
+	store.RecordOOM("stale", 1)
+	api := &stubDockerAPI{
+		listErr: fmt.Errorf("docker down"),
+	}
+	srv := NewServerWithAPIAndOOM(api, nil, store, time.Now)
+	rec := httptest.NewRecorder()
+	srv.ServeMetrics(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(rec.Body.String(), "docker_health_exporter_up 0") {
+		t.Fatal("expected list failure response")
+	}
+	if got := store.Count("stale"); got != 1 {
+		t.Fatalf("prune on list error: count = %d, want 1", got)
 	}
 }
 
@@ -278,6 +403,22 @@ func waitForOOMCount(t *testing.T, srv *Server, id string, want uint64) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("oom count for %s did not reach %d (got %d)", id, want, srv.oomStore.Count(id))
+}
+
+type stubDockerAPI struct {
+	listErr error
+}
+
+func (s *stubDockerAPI) List(context.Context) ([]Container, error) {
+	return nil, s.listErr
+}
+
+func (s *stubDockerAPI) Inspect(context.Context, string) (*Inspect, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (s *stubDockerAPI) Stats(context.Context, string) (*Stats, error) {
+	return nil, fmt.Errorf("not implemented")
 }
 
 func scrapeServer(t *testing.T, srv *Server) string {
