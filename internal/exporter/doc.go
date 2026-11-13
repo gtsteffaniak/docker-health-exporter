@@ -9,6 +9,8 @@
 // HTTP request fans out to list, inspect per container, and stats per running
 // container. A background goroutine streams GET /events (filtered to container
 // oom) over the same socket into an in-memory counter; counts reset on
-// exporter restart. With the default 30s Alloy scrape, /metrics is a handful
+// exporter restart. OOM state is pruned after each successful container list
+// so removed container IDs do not accumulate for the process lifetime. With the
+// default 30s Alloy scrape, /metrics is a handful
 // of unix-socket round trips — far lighter than a cAdvisor-sized housekeeper.
 package exporter
